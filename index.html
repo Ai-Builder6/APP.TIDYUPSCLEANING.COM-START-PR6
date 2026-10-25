@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Google Tag Manager -->
+    <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+    new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+    })(window,document,'script','dataLayer','GTM-PQ4NMPGP');</script>
+    <!-- End Google Tag Manager -->
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18533917803"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+
+      // Initialize Google Consent Mode v2 before gtag('config') so EU/CA cookie banner consent is respected
+      (function() {
+        var adConsent = 'granted';
+        var analyticsConsent = 'granted';
+        try {
+          var saved = localStorage.getItem('tidyups_cookie_consent_v1');
+          if (saved) {
+            var parsed = JSON.parse(saved);
+            if (parsed && parsed.decided) {
+              adConsent = parsed.marketing ? 'granted' : 'denied';
+              analyticsConsent = parsed.analytics ? 'granted' : 'denied';
+            }
+          }
+        } catch (_) {}
+        gtag('consent', 'default', {
+          'ad_storage': adConsent,
+          'ad_user_data': adConsent,
+          'ad_personalization': adConsent,
+          'analytics_storage': analyticsConsent,
+          'functionality_storage': 'granted',
+          'security_storage': 'granted',
+          'wait_for_update': 500
+        });
+      })();
+
+      gtag('js', new Date());
+      gtag('config', 'AW-18533917803');
+
+      // Reusable helper + automatic conversion trigger on /booking conversion page
+      window.fireGoogleAdsBookingConversion = function(customValue, customCurrency) {
+        try {
+          gtag('event', 'conversion', {
+            'send_to': 'AW-18533917803/9UFlCKPg1KcdEOvI1IVF',
+            'value': typeof customValue === 'number' && customValue > 0 ? customValue : 1.0,
+            'currency': customCurrency || 'CAD'
+          });
+        } catch (_) {}
+      };
+    </script>
+
+    <!-- Event snippet for Google Ads Lead Conversion (/thank-you, /booking/thank-you, /book/thank-you) -->
+    <script>
+      (function() {
+        var path = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
+        var search = (window.location.search || '').toLowerCase();
+        if (
+          path === '/thank-you' ||
+          path === '/thankyou' ||
+          path === '/booking/thank-you' ||
+          path === '/book/thank-you' ||
+          path === '/booking' ||
+          path.indexOf('/booking/') === 0 ||
+          path === '/book' ||
+          path.indexOf('/book/') === 0 ||
+          search.indexOf('page=thank-you') !== -1 ||
+          search.indexOf('booking=1') !== -1
+        ) {
+          gtag('event', 'conversion', {
+            'send_to': 'AW-18533917803/9UFlCKPg1KcdEOvI1IVF',
+            'value': 1.0,
+            'currency': 'CAD'
+          });
+        }
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <script>
+      // 0. Guard against browser Web3 wallet extensions (e.g., Phantom evmAsk.js / MetaMask) throwing
+      // "TypeError: Cannot redefine property: ethereum" when multiple extensions inject into window
+      (function() {
+        try {
+          var origDefineProperty = Object.defineProperty;
+          if (origDefineProperty) {
+            Object.defineProperty = function(obj, prop, descriptor) {
+              try {
+                if (
+                  obj === window &&
+                  (prop === 'ethereum' || prop === 'solana' || prop === 'phantom' || prop === 'web3') &&
+                  descriptor &&
+                  typeof descriptor === 'object'
+                ) {
+                  var safeDesc = Object.assign({}, descriptor, { configurable: true });
+                  var existing = Object.getOwnPropertyDescriptor(window, prop);
+                  if (existing && existing.configurable === false) {
+                    return obj;
+                  }
+                  return origDefineProperty.call(Object, obj, prop, safeDesc);
+                }
+                return origDefineProperty.call(Object, obj, prop, descriptor);
+              } catch (err) {
+                var msg = String(err && err.message ? err.message : err || '');
+                if (
+                  msg.indexOf('Cannot redefine property') !== -1 ||
+                  prop === 'ethereum' ||
+                  prop === 'solana' ||
+                  prop === 'phantom'
+                ) {
+                  return obj;
+                }
+                throw err;
+              }
+            };
+          }
+
+          window.addEventListener(
+            'error',
+            function(event) {
+              var msg = String((event && event.message) || '');
+              var file = String((event && event.filename) || '');
+              if (
+                msg.indexOf('Cannot redefine property: ethereum') !== -1 ||
+                msg.indexOf('Cannot redefine property') !== -1 ||
+                file.indexOf('chrome-extension://') === 0 ||
+                file.indexOf('moz-extension://') === 0
+              ) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                return false;
+              }
+            },
+            true
+          );
+        } catch (_) {}
+      })();
+
+      // 1. Detect dedicated Customer-Only Booking Page (/book, /customer-booking, ?booking=1, or book.* domain) before React mounts
+      (function() {
+        try {
+          var host = (window.location.hostname || '').toLowerCase();
+          var path = (window.location.pathname || '').toLowerCase();
+          var search = (window.location.search || '').toLowerCase();
+          if (
+            path === '/thank-you' ||
+            path === '/thankyou' ||
+            path.indexOf('/thank-you/') === 0 ||
+            path === '/book' ||
+            path.indexOf('/book/') === 0 ||
+            path === '/booking' ||
+            path.indexOf('/booking/') === 0 ||
+            path === '/customer-booking' ||
+            path.indexOf('/customer-booking/') === 0 ||
+            search.indexOf('page=thank-you') !== -1 ||
+            search.indexOf('mode=customer') !== -1 ||
+            search.indexOf('booking=1') !== -1 ||
+            host.indexOf('book.') === 0 ||
+            host.indexOf('book.tidyupscleaning') !== -1
+          ) {
+            window.__FORCE_CUSTOMER_BOOKING_ONLY__ = true;
+            document.title = '833 TidyUps Cleaning Service — Online Customer Booking';
+          }
+        } catch (_) {}
+
+        // Auto-recover if a hashed JS chunk fails to load after a new deployment
+        window.addEventListener('vite:preloadError', function(event) {
+          event.preventDefault();
+          if (!sessionStorage.getItem('chunk_reload_attempted')) {
+            sessionStorage.setItem('chunk_reload_attempted', '1');
+            window.location.reload();
+          }
+        });
+      })();
+
+      // 2. Suppress Vite HMR WebSocket notices and safely stub HMR transport in proxied cloud preview
+      (function() {
+        try {
+          var RealWS = window.WebSocket;
+          if (RealWS) {
+            function createMockViteSocket(url, protocols) {
+              var target = new EventTarget();
+              var mock = {
+                url: String(url || ""),
+                protocol: typeof protocols === "string" ? protocols : "vite-hmr",
+                readyState: 1,
+                bufferedAmount: 0,
+                extensions: "",
+                binaryType: "blob",
+                onopen: null,
+                onmessage: null,
+                onerror: null,
+                onclose: null,
+                send: function() {},
+                close: function() { mock.readyState = 3; },
+                addEventListener: target.addEventListener.bind(target),
+                removeEventListener: target.removeEventListener.bind(target),
+                dispatchEvent: target.dispatchEvent.bind(target)
+              };
+              setTimeout(function() {
+                try {
+                  var evt = new Event("open");
+                  target.dispatchEvent(evt);
+                  if (typeof mock.onopen === "function") mock.onopen(evt);
+                } catch (_) {}
+              }, 0);
+              return mock;
+            }
+
+            function PatchedWebSocket(url, protocols) {
+              var urlStr = String(url || "");
+              var isViteHmr =
+                protocols === "vite-hmr" ||
+                (Array.isArray(protocols) && protocols.indexOf("vite-hmr") !== -1) ||
+                urlStr.indexOf(":24678") !== -1 ||
+                (urlStr.indexOf("token=") !== -1 && urlStr.indexOf("/ws/chat") === -1);
+
+              if (isViteHmr) {
+                return createMockViteSocket(url, protocols);
+              }
+              if (protocols !== undefined) {
+                return new RealWS(url, protocols);
+              }
+              return new RealWS(url);
+            }
+
+            PatchedWebSocket.prototype = RealWS.prototype;
+            PatchedWebSocket.CONNECTING = 0;
+            PatchedWebSocket.OPEN = 1;
+            PatchedWebSocket.CLOSING = 2;
+            PatchedWebSocket.CLOSED = 3;
+            window.WebSocket = PatchedWebSocket;
+          }
+
+          var origError = console.error;
+          console.error = function() {
+            var msg = Array.prototype.slice.call(arguments).map(function(a) {
+              return String(a && a.message ? a.message : a || "");
+            }).join(" ");
+            if (msg.indexOf("WebSocket closed without opened") !== -1 || msg.indexOf("[vite] failed to connect to websocket") !== -1) {
+              return;
+            }
+            return origError.apply(console, arguments);
+          };
+
+          window.addEventListener("unhandledrejection", function(event) {
+            if (event && event.reason && String(event.reason.message || event.reason).indexOf("WebSocket closed without opened") !== -1) {
+              event.preventDefault();
+            }
+          });
+
+          window.addEventListener("error", function(event) {
+            if (event && (event.message || "").indexOf("WebSocket closed without opened") !== -1) {
+              event.preventDefault();
+            }
+          });
+        } catch (_) {}
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#ec4899" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TidyUps" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>Tidyups Cleaning Dispatch App</title>
+    <meta name="description" content="Interactive regional territory dispatch board for 15 mobile cleaning tech's and 3 core cleaning services (Standard, Deep, Move-Out) with voice dictation booking intake, Edmonton route optimization, and Jobber backend sync." />
+    <link rel="canonical" href="https://app.tidyupscleaning.com" />
+    <meta property="og:site_name" content="Tidyups Cleaning Dispatch App" />
+    <meta property="og:title" content="Tidyups Cleaning Dispatch App" />
+    <meta property="og:description" content="Interactive regional territory dispatch board for 15 mobile cleaning tech's and 3 core cleaning services (Standard, Deep, Move-Out) with voice dictation booking intake, Edmonton route optimization, and Jobber backend sync." />
+    <meta property="og:url" content="https://app.tidyupscleaning.com" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Tidyups Cleaning Dispatch App" />
+    <meta name="twitter:description" content="Interactive regional territory dispatch board for 15 mobile cleaning tech's and 3 core cleaning services (Standard, Deep, Move-Out) with voice dictation booking intake, Edmonton route optimization, and Jobber backend sync." />
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Tidyups Cleaning Dispatch App",
+      "url": "https://app.tidyupscleaning.com",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "All",
+      "description": "Interactive regional territory dispatch board for 15 mobile cleaning tech's and 3 core cleaning services (Standard, Deep, Move-Out) with voice dictation booking intake, Edmonton route optimization, and Jobber backend sync.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "CAD"
+      }
+    }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+      // 3. Route Firebase Auth identitytoolkit / securetoken requests through backend Referer proxy so restricted API keys never return 403 API_KEY_HTTP_REFERRER_BLOCKED on preview domains
+      (function() {
+        try {
+          var origFetch = window.fetch;
+          if (origFetch) {
+            window.fetch = function(input, init) {
+              try {
+                var urlStr = typeof input === "string" ? input : (input && input.url ? input.url : String(input || ""));
+                if (
+                  urlStr.indexOf("https://identitytoolkit.googleapis.com/") === 0 ||
+                  urlStr.indexOf("https://securetoken.googleapis.com/") === 0
+                ) {
+                  var proxyUrl = "/api/firebase-auth-proxy?target=" + encodeURIComponent(urlStr);
+                  return origFetch.call(window, proxyUrl, init);
+                }
+              } catch (_) {}
+              return origFetch.apply(window, arguments);
+            };
+          }
+        } catch (_) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-50 text-slate-900 font-sans antialiased overflow-hidden select-none">
+    <!-- Google Tag Manager (noscript) -->
+    <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-PQ4NMPGP"
+    height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+    <!-- End Google Tag Manager (noscript) -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
