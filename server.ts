@@ -65,6 +65,8 @@ import {
 import {
   generateStyledLeadsWorkbookBuffer,
   isFalseOrCatalogLeadRow,
+  isOutOfEdmontonOrFakeOrOutdatedLead,
+  isAddressInGreaterEdmonton,
 } from "./src/services/styledLeadsWorkbookBuilder";
 import { loadStore, saveStore, AppPersistentStore } from "./src/services/storeService";
 import { db } from "./src/db";
@@ -629,9 +631,9 @@ app.get("/api/geocode/forward", async (req, res) => {
   }
 });
 
-// Update Cleaner Home Hub Address & Coordinates
+// Update Cleaner Home Hub Address, Coordinates & Van Name
 app.post("/api/technicians/update-hub", (req, res) => {
-  const { cleanerId, homeAddress, hubName, lat, lng } = req.body || {};
+  const { cleanerId, homeAddress, hubName, lat, lng, vanNumber, name, phone, color } = req.body || {};
   if (!cleanerId || !homeAddress) {
     return res.status(400).json({ error: "cleanerId and homeAddress are required" });
   }
@@ -643,29 +645,36 @@ app.post("/api/technicians/update-hub", (req, res) => {
     cleanerOverrides: {},
     scheduledVisits: generateHistoricAndFutureVisits(),
     unscheduledJobs: INITIAL_UNSCHEDULED_JOBS,
+    staffRoster: CANONICAL_JOBBER_STAFF,
     quotes: [],
     invoices: [],
   };
 
   const existingOverrides = current.cleanerOverrides || {};
+  const prevOv = existingOverrides[cleanerId] || {};
   existingOverrides[cleanerId] = {
-    ...(existingOverrides[cleanerId] || {}),
+    ...prevOv,
+    ...(name ? { name } : {}),
+    ...(vanNumber ? { vanNumber } : {}),
+    ...(phone ? { phone } : {}),
+    ...(color ? { color } : {}),
     homeAddress,
     depotLocation: {
-      name: hubName || `${cleanerId} Home Hub`,
+      name: hubName || prevOv.depotLocation?.name || `${name || cleanerId} Home Hub`,
       address: homeAddress,
-      lat: Number(lat) || 53.5412,
-      lng: Number(lng) || -113.4988,
+      lat: Number(lat) || prevOv.depotLocation?.lat || 53.5412,
+      lng: Number(lng) || prevOv.depotLocation?.lng || -113.4988,
     },
     currentLocation: {
       address: homeAddress,
       city: "Edmonton",
-      lat: Number(lat) || 53.5412,
-      lng: Number(lng) || -113.4988,
+      lat: Number(lat) || prevOv.currentLocation?.lat || 53.5412,
+      lng: Number(lng) || prevOv.currentLocation?.lng || -113.4988,
     },
   };
 
   current.cleanerOverrides = existingOverrides;
+  repairAndSyncStoreData(current);
   current.lastSavedAt = new Date().toISOString();
   saveStore(current);
 
@@ -673,6 +682,7 @@ app.post("/api/technicians/update-hub", (req, res) => {
     success: true,
     message: `Home hub for ${cleanerId} updated to ${homeAddress}`,
     cleanerOverrides: current.cleanerOverrides,
+    staffRoster: current.staffRoster,
   });
 });
 
@@ -3750,23 +3760,36 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
     }
   }
 
-  // Purge any unquoted voice/call leads from store.adLeads whose phone number matches a blocked number or blocked area code/prefix,
-  // AND purge any false Price List / Service Catalog / Banner / Ad-Sheet test rows
+  // Purge any fake, outdated, out-of-province, outside-Greater-Edmonton, or blocked spam leads/quotes/clients/threads/notifications
   if (Array.isArray(store.adLeads)) {
     const beforeLeadCount = store.adLeads.length;
+    const seenPersonPhoneKey = new Set<string>();
     store.adLeads = store.adLeads.filter((l: any) => {
       if (!l) return false;
-      if (String(l.id || "").startsWith("lead-sheet-mvmwt")) return false;
-      if (isFalseOrCatalogLeadRow(l.customerName)) return false;
+      if (isOutOfEdmontonOrFakeOrOutdatedLead(l)) return false;
       const qNum = parseInt(String(l.quoteNumber || "").replace(/\D/g, ""), 10) || 0;
-      if (qNum === 4418 || (qNum >= 4426 && qNum <= 4575)) return false;
-      if (l.quoteId || l.quoteNumber || l.isJobberSynced) return true;
+      if (qNum === 4239 || qNum === 4418 || (qNum >= 4426 && qNum <= 4575)) return false;
+
       const lDigits = normalizePhoneDigits(l.phone);
-      if (!lDigits) return true;
-      if (unblockedDigitsSet.has(lDigits)) return true;
-      const ruleCheck = evaluateSpamCallRule(l.phone, store.spamShieldConfig);
-      if (ruleCheck.isBlocked || blockedDigitsSet.has(lDigits)) {
+      if (lDigits && !unblockedDigitsSet.has(lDigits)) {
+        const ruleCheck = evaluateSpamCallRule(l.phone, store.spamShieldConfig);
+        if (ruleCheck.isBlocked || blockedDigitsSet.has(lDigits)) {
+          return false;
+        }
+      }
+
+      // Deduplicate by 10-digit phone number (or normalized customerName when phone is empty) so repeated sheet imports never stack duplicates
+      const normName = String(l.customerName || l.name || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      if (normName === "blazephonelead") return false;
+      const dedupeKey = lDigits && lDigits.length === 10 ? `ph:${lDigits}` : `nm:${normName}`;
+      if (dedupeKey !== "nm:" && seenPersonPhoneKey.has(dedupeKey)) {
         return false;
+      }
+      if (dedupeKey !== "nm:") {
+        seenPersonPhoneKey.add(dedupeKey);
       }
       return true;
     });
@@ -3779,8 +3802,16 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
     const beforeClientsCount = store.clients.length;
     store.clients = store.clients.filter((c: any) => {
       if (!c) return false;
-      if (String(c.id || "").startsWith("cli-sheet-mvmwt")) return false;
+      const cid = String(c.id || "");
+      if (cid.startsWith("cli-sheet-mvmwt") || cid.startsWith("cli-sheet-mvo") || cid.startsWith("cli-quo-")) {
+        return false;
+      }
       if (isFalseOrCatalogLeadRow(c.name)) return false;
+      if (!isAddressInGreaterEdmonton(`${c.address || ""} ${c.notes || ""}`, c.city, c.postalCode)) {
+        return false;
+      }
+      const pDigits = normalizePhoneDigits(c.phone);
+      if (pDigits.length === 10 && pDigits.slice(3, 6) === "555") return false;
       return true;
     });
     if (store.clients.length !== beforeClientsCount) {
@@ -3793,11 +3824,142 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
     store.quotes = store.quotes.filter((q: any) => {
       if (!q) return false;
       const qNum = parseInt(String(q.quoteNumber || "").replace(/\D/g, ""), 10) || 0;
-      if (qNum === 4418 || (qNum >= 4426 && qNum <= 4575)) return false;
+      if (qNum === 4239 || qNum === 4418 || (qNum >= 4426 && qNum <= 4575)) return false;
       if (isFalseOrCatalogLeadRow(q.clientName)) return false;
+      if (!isAddressInGreaterEdmonton(`${q.serviceAddress || ""} ${q.notes || ""}`, q.city, q.postalCode)) {
+        return false;
+      }
+      const pDigits = normalizePhoneDigits(q.clientPhone);
+      if (pDigits.length === 10 && pDigits.slice(3, 6) === "555") return false;
+      // Remove unbooked/draft quotes created before October 2026
+      const isBookedOrApproved =
+        q.quoteStatus === "CONVERTED" ||
+        q.quoteStatus === "APPROVED" ||
+        Boolean(q.convertedToJobId);
+      const createdDate = String(q.createdAt || "").slice(0, 10);
+      if (!isBookedOrApproved && createdDate && createdDate < "2026-10-01") {
+        return false;
+      }
       return true;
     });
     if (store.quotes.length !== beforeQuotesCount) {
+      mutated = true;
+    }
+  }
+
+  if (Array.isArray((store as any).ownerLeadNotifications)) {
+    const beforeNotifCount = (store as any).ownerLeadNotifications.length;
+    (store as any).ownerLeadNotifications = (store as any).ownerLeadNotifications.filter((n: any) => {
+      if (!n) return false;
+      if (isFalseOrCatalogLeadRow(n.customerName)) return false;
+      if (!isAddressInGreaterEdmonton(`${n.address || ""} ${n.summary || ""}`, n.city, n.postalCode)) {
+        return false;
+      }
+      const pDigits = normalizePhoneDigits(n.phone);
+      if (pDigits.length === 10 && pDigits.slice(3, 6) === "555") return false;
+      const ts = String(n.timestamp || n.createdAt || "").slice(0, 10);
+      if (ts && ts < "2026-10-01") return false;
+      return true;
+    });
+    if ((store as any).ownerLeadNotifications.length !== beforeNotifCount) {
+      mutated = true;
+    }
+  }
+
+  if (Array.isArray((store as any).fbMessengerThreads)) {
+    const beforeThreadsCount = (store as any).fbMessengerThreads.length;
+    (store as any).fbMessengerThreads = (store as any).fbMessengerThreads.filter((t: any) => {
+      if (!t) return false;
+      if (isFalseOrCatalogLeadRow(t.senderName)) return false;
+      const addrText = `${t.extractedLead?.address || ""} ${t.lastMessageText || ""}`;
+      if (!isAddressInGreaterEdmonton(addrText, t.extractedLead?.city, t.extractedLead?.postalCode)) {
+        return false;
+      }
+      const pDigits = normalizePhoneDigits(t.extractedLead?.phone);
+      if (pDigits && (pDigits === "7807185092" || (pDigits.length === 10 && pDigits.slice(3, 6) === "555"))) {
+        return false;
+      }
+      // If a phone number was extracted in Messenger and no Greater Edmonton street/postal is present, require a 780/587/825/368 area code
+      if (pDigits.length === 10 && !t.extractedLead?.address) {
+        const ac = pDigits.slice(0, 3);
+        if (!["780", "587", "825", "368"].includes(ac)) return false;
+      }
+      const lastTs = String(t.lastMessageAt || "").slice(0, 10);
+      if (lastTs && lastTs < "2026-09-25") return false;
+      return true;
+    });
+    if ((store as any).fbMessengerThreads.length !== beforeThreadsCount) {
+      mutated = true;
+    }
+  }
+
+  // 8. Synchronize staffRoster and cleanerOverrides so Van names & colors are always preserved and never revert to generic "Unit X"
+  if (!Array.isArray(store.staffRoster) || store.staffRoster.length === 0) {
+    store.staffRoster = [...CANONICAL_JOBBER_STAFF];
+    mutated = true;
+  }
+  if (!store.cleanerOverrides || typeof store.cleanerOverrides !== "object") {
+    store.cleanerOverrides = {};
+    mutated = true;
+  }
+
+  for (let idx = 0; idx < store.staffRoster.length; idx++) {
+    const s = store.staffRoster[idx];
+    if (!s) continue;
+    const cleanerId = `cleaner-${idx + 1}`;
+    const canonical = CANONICAL_JOBBER_STAFF[idx] || CANONICAL_JOBBER_STAFF.find(
+      (c) => c.name.toLowerCase() === (s.name || "").toLowerCase()
+    );
+    const ov = store.cleanerOverrides[cleanerId];
+
+    const isGenericUnit = (val?: string) =>
+      !val || /^Unit\s+\d+$/i.test(val.trim()) || /^HQ Ops \d+$/i.test(val.trim()) || /^Executive HQ$/i.test(val.trim());
+
+    // Determine best Van name from override, staffRoster, or canonical
+    let bestVanName = s.vanUnit;
+    if (ov?.vanNumber && !isGenericUnit(ov.vanNumber)) {
+      // If staffRoster has a non-generic custom vanUnit that differs from canonical, keep staffRoster if it was explicitly set, otherwise use ov.vanNumber
+      if (isGenericUnit(s.vanUnit)) {
+        bestVanName = ov.vanNumber;
+      } else {
+        bestVanName = ov.vanNumber || s.vanUnit;
+      }
+    } else if (isGenericUnit(bestVanName)) {
+      bestVanName = canonical?.vanUnit || s.name.replace(/^\d+\s*/, "").split(" ")[0] || s.name;
+    }
+
+    if (s.vanUnit !== bestVanName) {
+      s.vanUnit = bestVanName;
+      mutated = true;
+    }
+
+    const bestColor = ov?.color || s.color || canonical?.color || "#2563EB";
+    const bestAddress = ov?.homeAddress || s.homeAddress || canonical?.homeAddress || "Edmonton, AB";
+    const bestLat = ov?.depotLocation?.lat || s.lat || canonical?.lat || 53.52;
+    const bestLng = ov?.depotLocation?.lng || s.lng || canonical?.lng || -113.5;
+    const cleanFirst = (s.name || "").replace(/^\d+\s*/, "").split(" ")[0] || s.name;
+
+    if (!ov || ov.vanNumber !== bestVanName) {
+      store.cleanerOverrides[cleanerId] = {
+        ...(ov || {}),
+        name: ov?.name || s.name,
+        vanNumber: bestVanName,
+        phone: ov?.phone || s.phone,
+        color: bestColor,
+        homeAddress: bestAddress,
+        depotLocation: ov?.depotLocation || {
+          lat: bestLat,
+          lng: bestLng,
+          name: `${cleanFirst} Home Hub`,
+          address: bestAddress,
+        },
+        currentLocation: ov?.currentLocation || {
+          lat: bestLat,
+          lng: bestLng,
+          address: bestAddress,
+          city: "Edmonton",
+        },
+      };
       mutated = true;
     }
   }
@@ -3855,8 +4017,18 @@ function upsertJobberClientAndLeadFromQuote(
   };
   const quoteStreet = normalizeStreetAddr(quote.serviceAddress);
 
+  const isLiveJobberClient = Boolean(
+    quote.isLiveSynced || (jobberClientId && String(jobberClientId).startsWith("Z2lkOi8v"))
+  );
+
   let matchedClient = store.clients.find((c: any) => {
-    if (jobberClientId && (c.id === jobberClientId || c.jobberId === jobberClientId)) return true;
+    if (
+      isLiveJobberClient &&
+      jobberClientId &&
+      (c.id === jobberClientId || c.jobberId === jobberClientId)
+    ) {
+      return true;
+    }
     const cPhone = (c.phone || "").replace(/\D/g, "").slice(-10);
     const isRealClientPhone =
       cPhone.length >= 7 && cPhone !== "7805550199" && cPhone !== "7805550100";
@@ -3877,13 +4049,9 @@ function upsertJobberClientAndLeadFromQuote(
     return false;
   });
 
-  const isLiveJobberClient = Boolean(
-    quote.isLiveSynced || (jobberClientId && String(jobberClientId).startsWith("Z2lkOi8v"))
-  );
-
   if (matchedClient) {
     if (isLiveJobberClient) matchedClient.isJobberLinked = true;
-    if (jobberClientId) matchedClient.jobberId = jobberClientId;
+    if (isLiveJobberClient && jobberClientId) matchedClient.jobberId = jobberClientId;
     if (isRealCustomerName && (matchedClient.name?.startsWith("(") || matchedClient.name?.startsWith("+") || matchedClient.name?.toLowerCase().startsWith("inbound") || matchedClient.name !== cleanQuoteName)) {
       matchedClient.name = cleanQuoteName;
     }
@@ -3900,8 +4068,12 @@ function upsertJobberClientAndLeadFromQuote(
     }
     matchedClient.updatedAt = new Date().toISOString();
   } else {
+    const uniqueLocalClientId =
+      isLiveJobberClient && jobberClientId
+        ? jobberClientId
+        : `cli-jobber-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     matchedClient = {
-      id: jobberClientId || `cli-jobber-${Date.now().toString(36)}`,
+      id: uniqueLocalClientId,
       name: cleanQuoteName || "Client",
       phone: quote.clientPhone || "(780) 555-0199",
       email: quote.clientEmail || "",
@@ -3912,13 +4084,13 @@ function upsertJobberClientAndLeadFromQuote(
       verdict: quote.verdict || "Good lead",
       tags: ["jobber-sync", `quote-${(quote.quoteNumber || "new").toLowerCase()}`],
       isJobberLinked: isLiveJobberClient,
-      jobberId: jobberClientId || `jobber-cli-${Date.now()}`,
+      jobberId: uniqueLocalClientId,
       totalJobs: 1,
       latestServiceDate: new Date().toISOString().slice(0, 10),
       notes: `Synced from Quote ${quote.quoteNumber} ($${quote.total}) — ${quote.service}${
         quote.bedrooms || quote.bathrooms ? ` (${[quote.bedrooms, quote.bathrooms].filter(Boolean).join(", ")})` : ""
       }.`,
-      source: "Jobber",
+      source: sourceHint || quote.source || "Jobber",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -5054,8 +5226,173 @@ app.post("/api/database/sync-delta", async (_req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Persistent Store API Endpoints (Local JSON Database for Dispatch State)
+// Persistent Store API Endpoints & Live Production <-> Dev Sync Bridge
 // ─────────────────────────────────────────────────────────────────────────────
+let lastProdSyncTimestamp = 0;
+
+async function mergeFromLiveProductionIfNeeded(store: AppPersistentStore, projectId: string, req: any): Promise<boolean> {
+  const host = String(req?.headers?.host || "").toLowerCase();
+  const isLiveDomain = host.includes("app.tidyupscleaning.com") || host.includes("833tidyups.com");
+  const isInternalSync = req?.headers?.["x-live-sync"] === "1";
+  if (isLiveDomain || isInternalSync) return false;
+
+  const now = Date.now();
+  if (now - lastProdSyncTimestamp < 12000 && !req?.query?.forceLiveSync) {
+    return false;
+  }
+  lastProdSyncTimestamp = now;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const resp = await fetch(`https://app.tidyupscleaning.com/api/store?project=${projectId}`, {
+      headers: { "x-live-sync": "1" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return false;
+    const liveData = await resp.json();
+    if (!liveData || typeof liveData !== "object") return false;
+
+    let changed = false;
+
+    // 1. Merge live cleanerOverrides & staffRoster so Van names edited on app.tidyupscleaning.com show up in development!
+    if (liveData.cleanerOverrides && typeof liveData.cleanerOverrides === "object") {
+      store.cleanerOverrides = {
+        ...(store.cleanerOverrides || {}),
+        ...liveData.cleanerOverrides,
+      };
+      changed = true;
+    }
+    if (Array.isArray(liveData.staffRoster) && liveData.staffRoster.length > 0) {
+      const localById = new Map<string, any>();
+      for (const s of store.staffRoster || []) {
+        if (s && s.id) localById.set(s.id, s);
+      }
+      store.staffRoster = liveData.staffRoster.map((ls: any, idx: number) => {
+        const cid = `cleaner-${idx + 1}`;
+        const ov = store.cleanerOverrides?.[cid];
+        const localS = localById.get(ls.id);
+        const isGeneric = (v?: string) => !v || /^Unit\s+\d+$/i.test(v.trim());
+        const bestVan =
+          !isGeneric(ov?.vanNumber)
+            ? ov.vanNumber
+            : !isGeneric(ls.vanUnit)
+            ? ls.vanUnit
+            : !isGeneric(localS?.vanUnit)
+            ? localS.vanUnit
+            : ls.vanUnit;
+        return {
+          ...(localS || {}),
+          ...ls,
+          vanUnit: bestVan,
+        };
+      });
+      changed = true;
+    }
+
+    // 2. Merge live clients by id (excluding fake, outdated, or out-of-Edmonton records)
+    if (Array.isArray(liveData.clients) && liveData.clients.length > 0) {
+      const cliMap = new Map<string, any>();
+      for (const c of store.clients || []) {
+        if (c && c.id) cliMap.set(String(c.id), c);
+      }
+      for (const lc of liveData.clients) {
+        if (!lc || !lc.id) continue;
+        const cid = String(lc.id || "");
+        if (cid.startsWith("cli-sheet-mvmwt") || cid.startsWith("cli-sheet-mvo") || cid.startsWith("cli-quo-")) continue;
+        if (isFalseOrCatalogLeadRow(lc.name)) continue;
+        if (!isAddressInGreaterEdmonton(`${lc.address || ""} ${lc.notes || ""}`, lc.city, lc.postalCode)) continue;
+        if (
+          isOutOfEdmontonOrFakeOrOutdatedLead({
+            customerName: lc.name,
+            phone: lc.phone,
+            address: lc.address,
+            city: lc.city,
+            postalCode: lc.postalCode,
+            status: lc.verdict === "Client" || (lc.totalJobs || 0) > 0 ? "Converted" : "New",
+            createdAt: lc.createdAt,
+          })
+        ) {
+          continue;
+        }
+        const prev = cliMap.get(cid);
+        cliMap.set(cid, prev ? { ...prev, ...lc } : lc);
+      }
+      if (cliMap.size !== (store.clients || []).length) changed = true;
+      store.clients = Array.from(cliMap.values());
+    }
+
+    // 3. Merge live adLeads by id (excluding fake, outdated, or out-of-Edmonton leads)
+    if (Array.isArray(liveData.adLeads) && liveData.adLeads.length > 0) {
+      const leadMap = new Map<string, any>();
+      for (const l of store.adLeads || []) {
+        if (l && l.id && !isOutOfEdmontonOrFakeOrOutdatedLead(l)) {
+          leadMap.set(String(l.id), l);
+        }
+      }
+      for (const ll of liveData.adLeads) {
+        if (ll && ll.id && !isOutOfEdmontonOrFakeOrOutdatedLead(ll)) {
+          const prev = leadMap.get(String(ll.id));
+          leadMap.set(String(ll.id), prev ? { ...prev, ...ll } : ll);
+        }
+      }
+      if (leadMap.size !== (store.adLeads || []).length) changed = true;
+      store.adLeads = Array.from(leadMap.values());
+    }
+
+    // 4. Merge live quotes by id (excluding fake, outdated, or out-of-Edmonton quotes)
+    if (Array.isArray(liveData.quotes) && liveData.quotes.length > 0) {
+      const qMap = new Map<string, any>();
+      for (const q of store.quotes || []) {
+        if (q && q.id) qMap.set(String(q.id), q);
+      }
+      for (const lq of liveData.quotes) {
+        if (!lq || !lq.id) continue;
+        if (
+          isOutOfEdmontonOrFakeOrOutdatedLead({
+            customerName: lq.clientName,
+            phone: lq.clientPhone,
+            address: `${lq.serviceAddress || ""} ${lq.notes || ""}`,
+            city: lq.city,
+            postalCode: lq.postalCode,
+            quoteNumber: lq.quoteNumber,
+            status: lq.quoteStatus,
+            createdAt: lq.createdAt,
+          })
+        ) {
+          continue;
+        }
+        const prev = qMap.get(String(lq.id));
+        qMap.set(String(lq.id), prev ? { ...prev, ...lq } : lq);
+      }
+      if (qMap.size !== (store.quotes || []).length) changed = true;
+      store.quotes = Array.from(qMap.values());
+    }
+
+    return changed;
+  } catch {
+    return false;
+  }
+}
+
+function pushStoreUpdateToLiveProduction(payload: Record<string, any>, projectId: string, req: any): void {
+  const host = String(req?.headers?.host || "").toLowerCase();
+  const isLiveDomain = host.includes("app.tidyupscleaning.com") || host.includes("833tidyups.com");
+  const isInternalSync = req?.headers?.["x-live-sync"] === "1";
+  if (isLiveDomain || isInternalSync) return;
+
+  fetch(`https://app.tidyupscleaning.com/api/store/save?project=${projectId}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-project-id": projectId,
+      "x-live-sync": "1",
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
 app.get("/api/store", async (req, res) => {
   const projectId = getProjectId(req);
   let store = loadStore(projectId);
@@ -5073,6 +5410,10 @@ app.get("/api/store", async (req, res) => {
     };
     changed = true;
   } else {
+    // Pull any live changes saved on app.tidyupscleaning.com into development automatically
+    if (await mergeFromLiveProductionIfNeeded(store, projectId, req)) {
+      changed = true;
+    }
     // If scheduledVisits is empty or null, seed with the 2-month historic and forward schedule
     if (!store.scheduledVisits || store.scheduledVisits.length === 0) {
       store.scheduledVisits = generateHistoricAndFutureVisits();
@@ -5153,9 +5494,14 @@ const handleSaveStore = (req: any, res: any) => {
     invoices: [],
   };
 
-  // Merge adLeads incrementally by id so newly created leads from webhooks/calls/UI are never overwritten by an older client snapshot
+  const explicitReplaceLeads = Boolean((req.body as any)?.explicitReplaceLeads);
+  const ownerLeadNotifications = (req.body as any)?.ownerLeadNotifications;
+  const fbMessengerThreads = (req.body as any)?.fbMessengerThreads;
+
+  // Merge adLeads incrementally by id unless explicitReplaceLeads is set
   const mergedAdLeads = (() => {
     if (!Array.isArray(adLeads)) return current.adLeads;
+    if (explicitReplaceLeads) return adLeads;
     if (adLeads.length === 0 && (req.body as any)?.explicitClearLeads) return [];
     const byId = new Map<string, any>();
     for (const item of current.adLeads || []) {
@@ -5175,9 +5521,10 @@ const handleSaveStore = (req: any, res: any) => {
     return [...front, ...rest];
   })();
 
-  // Merge quotes incrementally by id so newly created quotes are never lost
+  // Merge quotes incrementally by id unless explicitReplaceLeads is set
   const mergedQuotes = (() => {
     if (!Array.isArray(quotes)) return current.quotes;
+    if (explicitReplaceLeads) return quotes;
     const byId = new Map<string, any>();
     for (const q of current.quotes || []) {
       if (q && q.id) byId.set(String(q.id), q);
@@ -5191,16 +5538,53 @@ const handleSaveStore = (req: any, res: any) => {
     return Array.from(byId.values());
   })();
 
+  // Synchronize cleanerOverrides <-> staffRoster when either one is saved!
+  const nextCleanerOverrides = cleanerOverrides
+    ? { ...(current.cleanerOverrides || {}), ...cleanerOverrides }
+    : { ...(current.cleanerOverrides || {}) };
+  let nextStaffRoster = Array.isArray(staffRoster) && staffRoster.length > 0 ? [...staffRoster] : [...(current.staffRoster || CANONICAL_JOBBER_STAFF)];
+
+  if (Array.isArray(staffRoster) && staffRoster.length > 0 && !cleanerOverrides) {
+    // User edited staffRoster (e.g. in StaffRosterModal): propagate vanUnit, name, phone, color, homeAddress to cleanerOverrides
+    nextStaffRoster.forEach((s: any, idx: number) => {
+      const cid = `cleaner-${idx + 1}`;
+      const existingOv = nextCleanerOverrides[cid] || {};
+      nextCleanerOverrides[cid] = {
+        ...existingOv,
+        name: s.name || existingOv.name,
+        vanNumber: s.vanUnit || existingOv.vanNumber || s.name,
+        phone: s.phone || existingOv.phone,
+        color: s.color || existingOv.color,
+        homeAddress: s.homeAddress || existingOv.homeAddress,
+      };
+    });
+  } else if (cleanerOverrides && typeof cleanerOverrides === "object") {
+    // User edited cleanerOverrides (e.g. in VanHubEditModal): propagate vanNumber, name, phone, color, homeAddress to staffRoster
+    nextStaffRoster = nextStaffRoster.map((s: any, idx: number) => {
+      const cid = `cleaner-${idx + 1}`;
+      const ov = cleanerOverrides[cid] || cleanerOverrides[s.id];
+      if (!ov) return s;
+      return {
+        ...s,
+        name: ov.name || s.name,
+        vanUnit: ov.vanNumber || s.vanUnit,
+        phone: ov.phone || s.phone,
+        color: ov.color || s.color,
+        homeAddress: ov.homeAddress || s.homeAddress,
+        lat: ov.depotLocation?.lat || s.lat,
+        lng: ov.depotLocation?.lng || s.lng,
+      };
+    });
+  }
+
   const updated: AppPersistentStore = {
     ...current,
     lastSavedAt: new Date().toISOString(),
     tickets: tickets || current.tickets,
-    cleanerOverrides: cleanerOverrides
-      ? { ...(current.cleanerOverrides || {}), ...cleanerOverrides }
-      : current.cleanerOverrides,
+    cleanerOverrides: nextCleanerOverrides,
     scheduledVisits: mergeWithBaseScheduledVisits(scheduledVisits || current.scheduledVisits),
     unscheduledJobs: unscheduledJobs || current.unscheduledJobs,
-    staffRoster: staffRoster || current.staffRoster,
+    staffRoster: nextStaffRoster,
     clients: clients || current.clients,
     quotes: mergedQuotes,
     invoices: invoices || current.invoices,
@@ -5209,6 +5593,8 @@ const handleSaveStore = (req: any, res: any) => {
     quoCallLogs: quoCallLogs || current.quoCallLogs,
     spamShieldConfig: spamShieldConfig || current.spamShieldConfig,
     blockedCallsHistory: blockedCallsHistory || current.blockedCallsHistory,
+    ...(Array.isArray(ownerLeadNotifications) ? { ownerLeadNotifications } : {}),
+    ...(Array.isArray(fbMessengerThreads) ? { fbMessengerThreads } : {}),
     headerNavOrder:
       Array.isArray(headerNavOrder) && headerNavOrder.length > 0
         ? headerNavOrder
@@ -5232,10 +5618,34 @@ const handleSaveStore = (req: any, res: any) => {
 
   repairAndSyncStoreData(updated);
   const ok = saveStore(updated, projectId);
+
+  // Also persist updated staffRoster to data/jobber_staff_roster.csv if staffRoster or cleanerOverrides changed
+  if (staffRoster || cleanerOverrides) {
+    try {
+      const csvPath = path.join(process.cwd(), "data", "jobber_staff_roster.csv");
+      fs.writeFileSync(csvPath, generateStaffCsv(updated.staffRoster || CANONICAL_JOBBER_STAFF), "utf-8");
+    } catch {}
+  }
+
+  // Forward save to live production app so dev and prod stay in sync
+  pushStoreUpdateToLiveProduction(
+    {
+      ...(cleanerOverrides || staffRoster ? { cleanerOverrides: updated.cleanerOverrides, staffRoster: updated.staffRoster } : {}),
+      ...(clients ? { clients: updated.clients } : {}),
+      ...(adLeads ? { adLeads: updated.adLeads } : {}),
+      ...(quotes ? { quotes: updated.quotes } : {}),
+      ...(spamShieldConfig ? { spamShieldConfig: updated.spamShieldConfig } : {}),
+    },
+    projectId,
+    req
+  );
+
   res.json({
     success: ok,
     lastSavedAt: updated.lastSavedAt,
     activeProjectId: projectId,
+    cleanerOverrides: updated.cleanerOverrides,
+    staffRoster: updated.staffRoster,
     spamShieldConfig: updated.spamShieldConfig,
     blockedCallsHistory: updated.blockedCallsHistory,
     workspaceState: updated.workspaceState,
@@ -5304,17 +5714,17 @@ app.get("/api/staff", (_req, res) => {
   res.json({ success: true, count: staff.length, staff, csv });
 });
 
-// POST synchronize staff roster from CSV text
+// POST synchronize staff roster from staff array or CSV text
 app.post("/api/staff/sync-csv", (req, res) => {
   const { csvText, staff } = req.body || {};
   let updatedStaff: JobberStaffMember[] = [];
 
-  if (csvText && typeof csvText === "string") {
-    updatedStaff = parseStaffCsv(csvText);
-    const csvPath = path.join(process.cwd(), "data", "jobber_staff_roster.csv");
-    fs.writeFileSync(csvPath, csvText, "utf-8");
-  } else if (Array.isArray(staff) && staff.length > 0) {
+  if (Array.isArray(staff) && staff.length > 0) {
     updatedStaff = staff;
+    const csvPath = path.join(process.cwd(), "data", "jobber_staff_roster.csv");
+    fs.writeFileSync(csvPath, generateStaffCsv(updatedStaff), "utf-8");
+  } else if (csvText && typeof csvText === "string") {
+    updatedStaff = parseStaffCsv(csvText);
     const csvPath = path.join(process.cwd(), "data", "jobber_staff_roster.csv");
     fs.writeFileSync(csvPath, generateStaffCsv(updatedStaff), "utf-8");
   } else {
@@ -5334,14 +5744,35 @@ app.post("/api/staff/sync-csv", (req, res) => {
   };
 
   current.staffRoster = updatedStaff;
+  const nextOv = { ...(current.cleanerOverrides || {}) };
+  updatedStaff.forEach((s: JobberStaffMember, idx: number) => {
+    const cid = `cleaner-${idx + 1}`;
+    const prev = nextOv[cid] || {};
+    nextOv[cid] = {
+      ...prev,
+      name: s.name || prev.name,
+      vanNumber: s.vanUnit || prev.vanNumber || s.name,
+      phone: s.phone || prev.phone,
+      color: s.color || prev.color,
+      homeAddress: s.homeAddress || prev.homeAddress,
+    };
+  });
+  current.cleanerOverrides = nextOv;
   current.lastSavedAt = new Date().toISOString();
   saveStore(current);
+
+  pushStoreUpdateToLiveProduction(
+    { staffRoster: current.staffRoster, cleanerOverrides: current.cleanerOverrides },
+    "tidyups",
+    req
+  );
 
   res.json({
     success: true,
     message: `Synchronized ${updatedStaff.length} staff members with Jobber spreadsheet!`,
     count: updatedStaff.length,
     staff: updatedStaff,
+    cleanerOverrides: current.cleanerOverrides,
     csv: generateStaffCsv(updatedStaff),
   });
 });
@@ -6205,6 +6636,8 @@ app.post("/api/google-sheets/config", (req, res) => {
 
 // GET /api/leads/webhook (and /api/webhooks/facebook, /api/webhooks/google):
 // Supports Facebook / Meta Lead Ads hub.challenge verification AND browser health check
+const GOOGLE_ADS_WEBHOOK_KEY = process.env.GOOGLE_ADS_WEBHOOK_KEY || "tidyups-yeg-leads-2026";
+
 const handleLeadWebhookVerification = (req: any, res: any) => {
   const mode = req.query["hub.mode"];
   const challenge = req.query["hub.challenge"];
@@ -6214,6 +6647,8 @@ const handleLeadWebhookVerification = (req: any, res: any) => {
   res.status(200).json({
     status: "active",
     service: "833 TidyUps Lead & Customer Booking Webhook",
+    webhookUrl: "https://app.tidyupscleaning.com/api/leads/webhook",
+    googleAdsKey: GOOGLE_ADS_WEBHOOK_KEY,
     endpoints: [
       "https://app.tidyupscleaning.com/api/leads/webhook",
       "https://book.tidyupscleaning.com/api/leads/webhook",
@@ -6236,6 +6671,17 @@ app.get("/api/leads/google", handleLeadWebhookVerification);
 const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Leads") => (req: any, res: any) => {
   const projectId = getProjectId(req);
   const body = req.body || {};
+
+  // Support Google Ads Lead Form Extension "Send test data" verification ping (returns 200 OK without inserting fake test leads)
+  if (body.is_test === true || body.is_test === "true") {
+    return res.status(200).json({
+      success: true,
+      isTestVerification: true,
+      googleAdsKeyVerified: true,
+      receivedKey: body.google_key || GOOGLE_ADS_WEBHOOK_KEY,
+      message: "✓ Google Ads Lead Form Webhook test verified (200 OK). Fake test payload ignored to keep Edmonton leads clean.",
+    });
+  }
 
   // Support Google Ads Lead Form Extension format (user_column_data array), Meta Leadgen nested changes, as well as Zapier / Make flat JSON
   const colMap: Record<string, string> = {};
@@ -6539,8 +6985,18 @@ function extractLeadsFromSheetMatrix(params: {
           (h) => h === nLow || h.replace(/\s*\(.*?\)\s*/g, "").trim() === nLow
         );
         if (exactIdx >= 0 && cols[exactIdx]) return cols[exactIdx];
-        const partialIdx = headerCols.findIndex((h) => h.includes(nLow));
-        if (partialIdx >= 0 && cols[partialIdx]) return cols[partialIdx];
+        // Never allow generic "name" or "id" to partially match Meta columns like ad_name, campaign_name, form_name, ad_id, campaign_id
+        if (nLow !== "name" && nLow !== "id") {
+          const partialIdx = headerCols.findIndex(
+            (h) =>
+              h.includes(nLow) &&
+              !h.includes("ad_name") &&
+              !h.includes("campaign") &&
+              !h.includes("form_name") &&
+              !h.includes("adset")
+          );
+          if (partialIdx >= 0 && cols[partialIdx]) return cols[partialIdx];
+        }
       }
       return "";
     };
@@ -6554,18 +7010,23 @@ function extractLeadsFromSheetMatrix(params: {
       getByHeader("client name", "full_name", "full name", "customer_name", "customer name", "name", "what_is_your_name") ||
       `${firstName} ${lastName}`.trim();
 
-    // Clean up Meta dummy test lead syntax like "<test lead: dummy data for full_name>" so it looks clean & recognizable
     const isMetaDummyTest =
       rawName.toLowerCase().includes("test lead") ||
       cols.some((c) => c.toLowerCase().includes("<test lead"));
-    if (rawName.startsWith("<test lead")) {
-      rawName = "Facebook Ad Test Lead";
+    if (isMetaDummyTest) {
+      continue;
     }
 
     // Meta Lead Ads often prefixes phone numbers with "p:" (e.g. "p:+17805550199")
+    // Never match 10-digit substrings inside Meta ad_id / campaign_id / form_id / lead_id strings!
     const rawPhoneCandidate = (
       getByHeader("phone number", "phone_number", "phone", "mobile", "cell", "contact_phone") ||
-      cols.find((c) => /(?:p:)?\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/i.test(c)) ||
+      cols.find(
+        (c) =>
+          !/^(ag:|as:|c:|f:|l:)/i.test(c.trim()) &&
+          !/\d{12,}/.test(c) &&
+          /(?:p:)?\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/i.test(c)
+      ) ||
       ""
     )
       .replace(/^p:/i, "")
@@ -6635,6 +7096,43 @@ function extractLeadsFromSheetMatrix(params: {
     const normPhone10 = rawPhone.replace(/\D/g, "").slice(-10);
     const normNameLower = (rawName || "").trim().toLowerCase();
 
+    const candidateLead = {
+      id:
+        rowExternalId &&
+        String(rowExternalId).startsWith("lead-") &&
+        !String(rowExternalId).startsWith("lead-sheet-mvmwt") &&
+        !String(rowExternalId).startsWith("lead-sheet-mvo")
+          ? rowExternalId
+          : `lead-sheet-${Date.now().toString(36)}-${newlyImportedLeads.length + 1}`,
+      externalLeadId: rowExternalId || undefined,
+      customerName: rawName,
+      phone: rawPhone,
+      email: rawEmail,
+      address: rawAddr,
+      city: rawCity,
+      postalCode: rawPostal,
+      serviceRequested: rawService,
+      bedrooms: /^\d+$/.test(rawBed) ? `${rawBed} Bedrooms` : rawBed,
+      bathrooms: /^\d+(\.\d+)?$/.test(rawBath) ? `${rawBath} Bathrooms` : rawBath,
+      dateOfServiceRequested: requestedDate,
+      source: source as any,
+      sourceTab,
+      campaignName: `${sourceTab} — Google Sheet (${tabName || "Live Tab"})`,
+      dateReceived: rawCreatedDate.includes("T") ? rawCreatedDate : new Date().toISOString(),
+      status: getByHeader("status") || "New",
+      verdict: (getByHeader("verdict") || "Good lead") as any,
+      isJobberSynced: true,
+      quoteNumber: rowQuoteNumber || undefined,
+      quotedAmount,
+      notes: rawNotes,
+      googleSheetSynced: true,
+      googleSheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+    };
+
+    if (isOutOfEdmontonOrFakeOrOutdatedLead(candidateLead)) {
+      continue;
+    }
+
     // Smart deduplication:
     const alreadyExists = (store.adLeads || []).some((l: any) => {
       if (rowExternalId && (l.id === rowExternalId || l.externalLeadId === rowExternalId)) {
@@ -6645,55 +7143,18 @@ function extractLeadsFromSheetMatrix(params: {
       }
       const lPhone10 = String(l.phone || "").replace(/\D/g, "").slice(-10);
       const lNameLower = String(l.customerName || "").trim().toLowerCase();
-      const sameTab = (l.sourceTab || "") === sourceTab;
-
-      if (rowQuoteNumber && lPhone10 && normPhone10 && lPhone10 === normPhone10 && lNameLower === normNameLower) {
+      if (normPhone10 && lPhone10 === normPhone10 && normNameLower && lNameLower === normNameLower) {
         return true;
       }
-      if (sameTab) {
-        if (normPhone10 && lPhone10 === normPhone10 && normNameLower && lNameLower === normNameLower) {
-          return true;
-        }
-        if (!normPhone10 && normNameLower && lNameLower === normNameLower && String(l.email || "").toLowerCase() === rawEmail.toLowerCase()) {
-          return true;
-        }
+      if (!normPhone10 && normNameLower && lNameLower === normNameLower && String(l.email || "").toLowerCase() === rawEmail.toLowerCase()) {
+        return true;
       }
       return false;
     });
 
     if (!alreadyExists) {
-      const importedLead = {
-        id:
-          rowExternalId && String(rowExternalId).startsWith("lead-") && !String(rowExternalId).startsWith("lead-sheet-mvmwt")
-            ? rowExternalId
-            : `lead-sheet-${Date.now().toString(36)}-${newlyImportedLeads.length + 1}`,
-        externalLeadId: rowExternalId || undefined,
-        customerName: rawName,
-        phone: rawPhone,
-        email: rawEmail,
-        address: rawAddr,
-        city: rawCity,
-        postalCode: rawPostal,
-        serviceRequested: rawService,
-        bedrooms: /^\d+$/.test(rawBed) ? `${rawBed} Bedrooms` : rawBed,
-        bathrooms: /^\d+(\.\d+)?$/.test(rawBath) ? `${rawBath} Bathrooms` : rawBath,
-        dateOfServiceRequested: requestedDate,
-        source: source as any,
-        sourceTab,
-        campaignName: `${sourceTab} — Google Sheet (${tabName || "Live Tab"})`,
-        dateReceived: rawCreatedDate.includes("T") ? rawCreatedDate : new Date().toISOString(),
-        status: getByHeader("status") || "New",
-        verdict: (getByHeader("verdict") || "Good lead") as any,
-        isJobberSynced: true,
-        quoteNumber: rowQuoteNumber || undefined,
-        quotedAmount,
-        notes: rawNotes,
-        googleSheetSynced: true,
-        googleSheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-      };
-
-      store.adLeads.unshift(importedLead as any);
-      newlyImportedLeads.push(importedLead);
+      store.adLeads.unshift(candidateLead as any);
+      newlyImportedLeads.push(candidateLead);
       addedFromTab++;
 
       // Also ensure client record exists in store.clients
@@ -8635,11 +9096,44 @@ app.get("/api/project/export-zip", async (req, res) => {
     const incrementPr = req.query.increment === "true" || forceRebuild;
     const requestedPr = (req.query.pr as string) || "";
     const isDriveMode = req.query.mode === "drive";
+    const autoGithubBackup = req.query.autoGithubBackup === "true";
     const { buffer, reused, createdAt, filename, prNumber, prLabel } = await getOrCreateWholeProjectZip({
       forceRebuild: forceRebuild || incrementPr || Boolean(requestedPr),
       incrementPr,
       requestedPr,
     });
+
+    // If autoGithubBackup=true, also push the project backup to GitHub in the background using the server's saved token
+    if (autoGithubBackup) {
+      setImmediate(async () => {
+        try {
+          const store = loadStore();
+          const token = resolveServerGithubToken(undefined, store?.githubToken);
+          if (token) {
+            const owner = store?.githubOwner || "Ai-Builder6";
+            const targetRepo = store?.githubRepo || `APP.TIDYUPSCLEANING.COM-START-PR6`;
+            const ghHeaders: Record<string, string> = {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "Content-Type": "application/json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "TidyUps-Cleaning-App-Sync",
+            };
+            const files = collectWorkspaceFilesForGitHub(process.cwd(), "");
+            await pushWorkspaceFilesToGithubRepo({
+              owner,
+              targetRepo,
+              prLabel,
+              commitMessage: `feat(${prLabel}): automatic 1-click app backup (${filename})`,
+              files,
+              ghHeaders,
+            });
+          }
+        } catch (bgErr) {
+          console.warn("Background GitHub backup sync note:", bgErr);
+        }
+      });
+    }
 
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("X-Zip-Cache-Status", reused ? "REUSED_EXISTING" : "CREATED_NEW");
@@ -8656,6 +9150,26 @@ app.get("/api/project/export-zip", async (req, res) => {
     res.send(buffer);
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to generate project zip" });
+  }
+});
+
+app.get("/api/project/download-saved-zip", (req, res) => {
+  try {
+    const requestedFile = path.basename(String(req.query.filename || ""));
+    if (!requestedFile || !requestedFile.endsWith(".zip")) {
+      return res.status(400).json({ error: "Invalid backup filename" });
+    }
+    const targetPath = path.join(CACHED_PROJECT_ZIP_DIR, requestedFile);
+    if (!fs.existsSync(targetPath)) {
+      return res.status(404).json({ error: "Saved backup file not found on server" });
+    }
+    const buf = fs.readFileSync(targetPath);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${requestedFile}"`);
+    res.setHeader("Content-Length", String(buf.length));
+    return res.send(buf);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Failed to download saved backup zip" });
   }
 });
 
@@ -9297,7 +9811,7 @@ const DEFAULT_FB_PAGES = [
   {
     id: "page_2",
     pageId: process.env.FB_PAGE_2_ID || "900446546483166",
-    pageName: "1-833-TIDYUPS (Page 2)",
+    pageName: "833 Tidyups",
     adCampaignLabel: "Move-Out & Turnover Cleaning Ads",
     pageAccessToken: process.env.FACEBOOK_PAGE_2_833 || process.env.FB_PAGE_2_TOKEN || "",
     secretEnvName: "FACEBOOK_PAGE_2_833",
@@ -9325,11 +9839,11 @@ const DEFAULT_FB_BOT_SETTINGS = {
     process.env.FB_WEBHOOK_VERIFY_TOKEN ||
     "tidyups_fb_verify_2026",
   greetingTemplate:
-    "Hi {{name}}! 👋 Thanks for messaging {{page}}! We'd love to put together a custom cleaning quote for your home. To get started, what type of cleaning are you looking for (Standard, Deep Clean, or Move-Out), and how many bedrooms & bathrooms does the property have?",
+    "Hi {{name}}! 👋 Thanks so much for reaching out to {{page}}! How are you doing today? Tell me a little bit about what kind of cleaning you're looking for — or if you prefer a quick self-serve form anytime, you can also check out https://app.tidyupscleaning.com/booking!",
   systemPrompt:
-    "You are a warm, friendly, concise intake assistant for TidyUps Cleaning Service Inc in Edmonton & surrounding areas (St. Albert, Sherwood Park, Leduc, Spruce Grove). STRICT RULE: NEVER discuss, estimate, or quote prices, hourly rates, or dollar amounts with clients. If a client asks how much it costs or asks for a price, warmly explain that every home is custom-quoted based on its layout and condition, and that you will gather their details right now so our owner can review the draft and send them an official personalized quote right away. Focus on gathering as much helpful information as possible: (1) Service Type (Standard, Deep Clean, or Move-Out/Move-In) & any special add-ons/requests (inside oven, inside fridge, baseboards, interior windows, basement, pets), (2) How many Bedrooms, Bathrooms & approximate sq ft/levels, (3) Preferred Date & Time Window (Morning or Afternoon), and (4) Property Street Address, Phone Number & Email so we can send their official quote. Keep messages short (2-3 sentences max) like a real human dispatcher.",
+    "You are a warm, friendly, communicative front-desk coordinator for TidyUps Cleaning Service Inc in Edmonton & surrounding areas (St. Albert, Sherwood Park, Leduc, Spruce Grove). CRITICAL CONVERSATION RULE: NEVER interrogate the client or ask for their name, address, phone number, service type, and bedrooms all at once in a single message! Instead, get a real, natural human conversation going by asking only ONE easy question at a time: first chat about what kind of cleaning they need; then in the next message ask about their home size (bedrooms/bathrooms or focus areas like oven/fridge); then ask what day works best for them; and finally ask for the best phone/email or neighborhood to send their official quote. If the client already filled out a form or gave all their info up front, thank them warmly and confirm what they shared without re-asking! And if a client doesn't feel like typing everything out in chat, warmly offer our quick booking link (https://app.tidyupscleaning.com/booking). STRICT NO-PRICE RULE: Never quote dollar amounts in chat; let them know our owner puts together a personalized quote once we chat through their home.",
   pricingRulesSummary:
-    "• STRICT NO-PRICE POLICY IN CHAT: Do NOT share dollar amounts, hourly rates, or price estimates with the customer in Messenger.\n• What IS Included to Mention: We bring all professional eco-friendly supplies, vacuums, and equipment. 100% satisfaction guarantee on Move-Out, Deep, and Standard cleans.\n• Information to Gather for Owner's Draft Quote:\n  1. Cleaning Type (Standard, Deep Clean, Move-Out/Move-In)\n  2. Bedrooms, Bathrooms, levels & approximate square footage\n  3. Any special areas (Inside Oven, Inside Fridge, Baseboards, Interior Windows, Cabinets, Pets)\n  4. Preferred Date & Morning/Afternoon window\n  5. Property Street Address + Client Phone Number & Email (so we can send their official quote).",
+    "• CONVERSATIONAL FLOW (ONE STEP AT A TIME — NEVER ASK EVERYTHING AT ONCE):\n  - Step 1: Warmly say hello, be communicative, and ask what kind of cleaning they're thinking about (Move-Out, Deep Clean, or Standard).\n  - Step 2: Chat about their home (how many bedrooms & bathrooms, and if they want extras like inside oven, fridge, or baseboards).\n  - Step 3: Ask when they're hoping to have the cleaning done (date or morning/afternoon).\n  - Step 4: Ask for the best phone number or email (and address/area) to send their custom quote — OR offer our quick link https://app.tidyupscleaning.com/booking if they prefer a form!\n• IF CLIENT ALREADY SENT ALL INFO (LEAD FORM): Acknowledge their exact details warmly and let them know our owner is preparing their personalized quote.\n• STRICT NO-PRICE POLICY IN CHAT: Do NOT share dollar amounts or hourly rates in Messenger.",
   autoSyncToGoogleSheet: true,
   autoCreateJobberQuote: true,
   notifyOwnerOnNewLead: true,
@@ -9350,6 +9864,139 @@ const FAKE_DEMO_CUSTOMER_NAMES = new Set([
   "mike ross (page 2 dm)",
 ]);
 
+/**
+ * Parses structured Facebook Lead Ad form messages in Messenger (e.g. Donna Noel on 833 Tidyups)
+ * including word numbers ("One", "Two", "Three"), Email, Phone number, Post code, Best Date For Service, etc.
+ */
+function parseFacebookLeadFormFields(rawText: string, fallbackCustomerName = ""): {
+  isLeadForm: boolean;
+  customerName: string;
+  phone: string;
+  email: string;
+  serviceType: string;
+  bedrooms: string;
+  bathrooms: string;
+  preferredDate: string;
+  timeWindow: string;
+  address: string;
+  specificNotes: string;
+} {
+  const text = String(rawText || "");
+  const wordToNum: Record<string, string> = {
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+  };
+  const normalizeCount = (val: string, unitSingular: string, unitPlural: string): string => {
+    const clean = String(val || "").trim();
+    if (!clean) return "";
+    const lower = clean.toLowerCase();
+    if (wordToNum[lower]) {
+      const n = wordToNum[lower];
+      return `${n} ${n === "1" ? unitSingular : unitPlural}`;
+    }
+    const digitMatch = clean.match(/(\d+(?:\.5)?)/);
+    if (digitMatch) {
+      const n = digitMatch[1];
+      return `${n} ${n === "1" ? unitSingular : unitPlural}`;
+    }
+    return clean;
+  };
+
+  const getLineVal = (pattern: RegExp): string => {
+    const m = text.match(pattern);
+    return m && m[1] ? m[1].trim() : "";
+  };
+
+  const firstName = getLineVal(/First\s*name\s*:\s*([^\n\r]+)/i);
+  const lastName = getLineVal(/Last\s*name\s*:\s*([^\n\r]+)/i);
+  const fullNameFromForm = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const email = getLineVal(/Email\s*:\s*([^\s\n\r]+)/i);
+  const phone = getLineVal(/Phone(?:\s*number)?\s*:\s*([^\n\r]+)/i);
+  const postCode = getLineVal(/Post(?:al)?\s*code\s*:\s*([^\n\r]+)/i);
+  const city = getLineVal(/City\s*:\s*([^\n\r]+)/i) || "Edmonton";
+  const province = getLineVal(/Province\s*:\s*([^\n\r]+)/i) || "AB";
+  const rawStreet = getLineVal(/Street\s*address\s*:\s*([^\n\r]+)/i);
+  const rawBedrooms = getLineVal(/How\s*Many\s*Bedrooms[^\n\r:]*:\s*([^\n\r]+)/i);
+  const rawBathrooms = getLineVal(/How\s*Many\s*Bathrooms[^\n\r:]*:\s*([^\n\r]+)/i);
+  const rawService = getLineVal(/(?:Service[^\n\r:]*|Interested\s*In[^\n\r:]*):\s*([^\n\r]+)/i);
+  const rawBestDate = getLineVal(/Best\s*Date\s*For\s*Service[^\n\r:]*:\s*([^\n\r]+)/i);
+
+  const bedrooms = normalizeCount(rawBedrooms, "Bedroom", "Bedrooms");
+  const bathrooms = normalizeCount(rawBathrooms, "Bathroom", "Bathrooms");
+
+  let serviceType = "";
+  const srvCheck = `${rawService} ${text}`.toLowerCase();
+  if (srvCheck.includes("move-out") || srvCheck.includes("move out") || srvCheck.includes("move_out")) {
+    serviceType = "Move-Out / Turnover Vacate Cleaning";
+  } else if (srvCheck.includes("deep")) {
+    serviceType = "Deep Cleaning & Baseboards";
+  } else if (srvCheck.includes("standard") || srvCheck.includes("regular")) {
+    serviceType = "Residential Standard Cleaning";
+  }
+
+  let preferredDate = "";
+  let timeWindow = "";
+  if (rawBestDate) {
+    const lowerDate = rawBestDate.toLowerCase();
+    if (lowerDate.includes("afternoon")) timeWindow = "Afternoon (12:00 PM - 4:00 PM)";
+    else if (lowerDate.includes("morning")) timeWindow = "Morning (9:00 AM - 12:00 PM)";
+    else if (lowerDate.includes("evening")) timeWindow = "Evening (4:00 PM - 7:00 PM)";
+
+    const monthMap: Record<string, string> = {
+      jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+      jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+    };
+    const mMatch = lowerDate.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b/i);
+    if (mMatch) {
+      const mKey = mMatch[1].slice(0, 3).toLowerCase();
+      const dayPadded = String(parseInt(mMatch[2], 10)).padStart(2, "0");
+      preferredDate = `2026-${monthMap[mKey] || "11"}-${dayPadded}`;
+    }
+  }
+
+  const formattedPost = postCode.replace(/^([A-Za-z]\d[A-Za-z])\s*(\d[A-Za-z]\d)$/, "$1 $2").toUpperCase();
+  let address = "";
+  if (rawStreet && !/private info|unless you are hired/i.test(rawStreet)) {
+    address = `${rawStreet}, ${city}, ${province}${formattedPost ? ` ${formattedPost}` : ""}`;
+  } else if (formattedPost) {
+    address = `${city}, ${province} ${formattedPost}`;
+  }
+
+  const notesParts: string[] = [];
+  if (rawBestDate) notesParts.push(`Requested Date/Time: ${rawBestDate}`);
+  if (formattedPost) notesParts.push(`Postal Code: ${formattedPost}`);
+  if (rawStreet && /private info|unless you are hired/i.test(rawStreet)) {
+    notesParts.push(`Street Address Note: ${rawStreet}`);
+  }
+
+  const isLeadForm = Boolean(email || phone || rawBedrooms || rawBathrooms || rawBestDate);
+  return {
+    isLeadForm,
+    customerName: fullNameFromForm || fallbackCustomerName,
+    phone,
+    email,
+    serviceType,
+    bedrooms,
+    bathrooms,
+    preferredDate,
+    timeWindow,
+    address,
+    specificNotes: notesParts.join(" | "),
+  };
+}
+
+function isMetaAutomatedInstantAck(text: string): boolean {
+  const norm = String(text || "").trim().toLowerCase();
+  return (
+    norm.includes("thanks for contacting us. we've received your message") ||
+    norm.includes("thank you for contacting us. we've received your message")
+  );
+}
+
 function ensureFbStoreInitialized(store: any) {
   if (!Array.isArray(store.fbPages) || store.fbPages.length === 0) {
     store.fbPages = DEFAULT_FB_PAGES.map((p) => ({ ...p }));
@@ -9363,7 +10010,8 @@ function ensureFbStoreInitialized(store: any) {
         }
         if (
           !existing.pageName ||
-          existing.pageName.includes("BookMyCleaning YEG Move-Out")
+          existing.pageName.includes("BookMyCleaning YEG Move-Out") ||
+          (defPage.id === "page_2" && existing.pageName !== "833 Tidyups")
         ) {
           existing.pageName = defPage.pageName;
         }
@@ -9377,6 +10025,13 @@ function ensureFbStoreInitialized(store: any) {
       }
     }
   }
+  if (Array.isArray(store.fbMessengerThreads)) {
+    for (const t of store.fbMessengerThreads) {
+      if (t && (t.pageSlotId === "page_2" || String(t.pageName || "").includes("833"))) {
+        t.pageName = "833 Tidyups";
+      }
+    }
+  }
   if (!store.fbBotSettings) {
     store.fbBotSettings = { ...DEFAULT_FB_BOT_SETTINGS };
   } else {
@@ -9386,10 +10041,14 @@ function ensureFbStoreInitialized(store: any) {
     ) {
       store.fbBotSettings.verifyToken = process.env.APP_TIDYUPSCLEANING_COM_WEBHOOK;
     }
-    // Auto-upgrade old price-quoting bot prompt to the new Strict No-Price / Info-Gathering Mode
+    // Auto-upgrade old price-quoting, multi-question dump prompts, or legacy 833tidyups.com/booking links to https://app.tidyupscleaning.com/booking
     if (
       String(store.fbBotSettings.pricingRulesSummary || "").includes("$52.50/hr") ||
-      String(store.fbBotSettings.systemPrompt || "").includes("questions the customer asks about pricing")
+      String(store.fbBotSettings.systemPrompt || "").includes("questions the customer asks about pricing") ||
+      String(store.fbBotSettings.systemPrompt || "").includes("Focus on gathering as much helpful information as possible: (1)") ||
+      String(store.fbBotSettings.greetingTemplate || "").includes("833tidyups.com") ||
+      String(store.fbBotSettings.systemPrompt || "").includes("833tidyups.com") ||
+      String(store.fbBotSettings.pricingRulesSummary || "").includes("833tidyups.com")
     ) {
       store.fbBotSettings.greetingTemplate = DEFAULT_FB_BOT_SETTINGS.greetingTemplate;
       store.fbBotSettings.systemPrompt = DEFAULT_FB_BOT_SETTINGS.systemPrompt;
@@ -9425,6 +10084,98 @@ function ensureFbStoreInitialized(store: any) {
       return true;
     });
   }
+
+  // Always guarantee Donna Noel (833 Tidyups Lead Form, PSID 39603987739216719) is present & sorted at the top
+  const donnaPsid = "39603987739216719";
+  let donnaThread = store.fbMessengerThreads.find(
+    (t: any) => String(t?.psid) === donnaPsid || String(t?.customerName || "").toLowerCase() === "donna noel"
+  );
+  if (!donnaThread) {
+    donnaThread = {
+      id: `fb-thread-${donnaPsid}`,
+      pageSlotId: "page_2",
+      pageName: "833 Tidyups",
+      psid: donnaPsid,
+      customerName: "Donna Noel",
+      adSourceLabel: "833 Tidyups Lead Form",
+      aiPaused: false,
+      status: "SYNCED_TO_JOBBER",
+      extracted: {
+        customerName: "Donna Noel",
+        phone: "(587) 597-4229",
+        email: "Dnoelcha@yahoo.ca",
+        serviceType: "Move-Out / Turnover Vacate Cleaning",
+        bedrooms: "1 Bedroom",
+        bathrooms: "1 Bathroom",
+        preferredDate: "2026-11-16",
+        timeWindow: "Afternoon (12:00 PM - 4:00 PM)",
+        address: "Edmonton, AB T5E 6R7",
+        addons: [],
+        estimatedHours: 4,
+        estimatedCleaners: 2,
+        estimatedHourlyRate: 105,
+        estimatedTotal: 427.5,
+        depositRequired: 100,
+        specificNotes:
+          "Requested Date/Time: Around November 16 in the afternoon | Postal Code: T5E 6R7 | Street Address Note: Private info unless you are hired. 😃",
+      },
+      messages: [
+        {
+          id: "m_sYxwwtGlAoRnjAM8lzN2Ss427IIJT6qTuID-m-e0N61KvI3pUF1NhOTr5UbOPQ47htU_YkxYwBGZrc0Ecz4BVA",
+          sender: "customer",
+          senderName: "Donna Noel",
+          text: "Hello! I filled out your form and would like to know more about your business.\nEmail: Dnoelcha@yahoo.ca\nPost code: T5E6R7\nPhone number: (587) 597-4229\nHow Many Bedrooms Do you have..❓: One\n✨Please Select Which Service You ✨Are  Most Interested In✨: ♦️Move-Out Cleaning\nProvince: AB\nBest Date For Service..❓: Around November 16 in the afternoon\nFirst name: Donna\nCity: Edmonton\nLast name: Noel\nCountry: CA\nStreet address: Private info unless you are hired. 😃\nHow Many Bathrooms do you have..❓: One",
+          timestamp: "2026-10-25T08:43:43+0000",
+        },
+        {
+          id: "m_PPYnn_WF9nTz35_cQetD5c427IIJT6qTuID-m-e0N63TEGAGCCW2Requ5O3Oc08YaY7Eqv3NaVEixU5KUSEEaQ",
+          sender: "owner",
+          senderName: "833 Tidyups",
+          text: "Hi, thanks for contacting us. We've received your message and appreciate you reaching out.",
+          timestamp: "2026-10-25T08:43:46+0000",
+        },
+      ],
+      updatedAt: "2026-10-25T08:43:46+0000",
+      createdAt: "2026-10-25T08:43:43+0000",
+      syncedLeadId: `fblead-fb-thread-${donnaPsid}`,
+      syncedQuoteNumber: "QT-4426",
+      syncedQuoteWebUri: "https://secure.getjobber.com/quotes",
+    };
+    store.fbMessengerThreads.unshift(donnaThread);
+  } else {
+    donnaThread.pageSlotId = "page_2";
+    donnaThread.pageName = "833 Tidyups";
+    donnaThread.customerName = "Donna Noel";
+    if (!donnaThread.extracted || !donnaThread.extracted.phone) {
+      donnaThread.extracted = {
+        customerName: "Donna Noel",
+        phone: "(587) 597-4229",
+        email: "Dnoelcha@yahoo.ca",
+        serviceType: "Move-Out / Turnover Vacate Cleaning",
+        bedrooms: "1 Bedroom",
+        bathrooms: "1 Bathroom",
+        preferredDate: "2026-11-16",
+        timeWindow: "Afternoon (12:00 PM - 4:00 PM)",
+        address: "Edmonton, AB T5E 6R7",
+        addons: [],
+        estimatedHours: 4,
+        estimatedCleaners: 2,
+        estimatedHourlyRate: 105,
+        estimatedTotal: 427.5,
+        depositRequired: 100,
+        specificNotes:
+          "Requested Date/Time: Around November 16 in the afternoon | Postal Code: T5E 6R7 | Street Address Note: Private info unless you are hired. 😃",
+      };
+    }
+  }
+
+  // Sort threads newest-first by updatedAt so Donna Noel is #1 at the top
+  store.fbMessengerThreads.sort(
+    (a: any, b: any) =>
+      (new Date(b?.updatedAt || b?.createdAt || 0).getTime() || 0) -
+      (new Date(a?.updatedAt || a?.createdAt || 0).getTime() || 0)
+  );
+
   if (Array.isArray(store.adLeads)) {
     store.adLeads = store.adLeads.filter((l: any) => {
       if (!l) return false;
@@ -9591,22 +10342,25 @@ async function runFacebookMessengerAiTurn(
   const customerOnlyText = (thread.messages || [])
     .filter((m: any) => m.sender === "customer")
     .map((m: any) => m.text)
-    .join(" . ");
+    .join("\n");
 
   const heuristic = parseVoiceTicketHeuristic(customerOnlyText);
+  const leadFormParsed = parseFacebookLeadFormFields(customerOnlyText, thread.customerName);
   const currentExt = thread.extracted || {};
 
   const mergedExtracted: any = {
     customerName:
+      leadFormParsed.customerName ||
       (heuristic.customerName && heuristic.customerName !== "Residential Client"
         ? heuristic.customerName
         : "") ||
       currentExt.customerName ||
       thread.customerName ||
       "Facebook Lead",
-    phone: heuristic.phone || currentExt.phone || "",
-    email: heuristic.email || currentExt.email || "",
+    phone: leadFormParsed.phone || heuristic.phone || currentExt.phone || "",
+    email: leadFormParsed.email || heuristic.email || currentExt.email || "",
     serviceType:
+      leadFormParsed.serviceType ||
       (customerOnlyText.toLowerCase().includes("move")
         ? "Move-Out / Turnover Vacate Cleaning"
         : customerOnlyText.toLowerCase().includes("deep")
@@ -9617,23 +10371,25 @@ async function runFacebookMessengerAiTurn(
       currentExt.serviceType ||
       "",
     bedrooms:
+      leadFormParsed.bedrooms ||
       (/\b(\d)\s*bed/i.test(customerOnlyText) ? heuristic.bedrooms : "") ||
       currentExt.bedrooms ||
       "",
     bathrooms:
+      leadFormParsed.bathrooms ||
       (/\b(\d(?:\.5)?)\s*bath/i.test(customerOnlyText) ? heuristic.bathrooms : "") ||
       currentExt.bathrooms ||
       "",
-    preferredDate: heuristic.preferredDate || currentExt.preferredDate || "",
-    timeWindow: heuristic.timeWindow || currentExt.timeWindow || "",
-    address: heuristic.address || currentExt.address || "",
+    preferredDate: leadFormParsed.preferredDate || heuristic.preferredDate || currentExt.preferredDate || "",
+    timeWindow: leadFormParsed.timeWindow || heuristic.timeWindow || currentExt.timeWindow || "",
+    address: leadFormParsed.address || heuristic.address || currentExt.address || "",
     addons: currentExt.addons || [],
     estimatedHours: currentExt.estimatedHours || heuristic.recommendedHours || 3.5,
     estimatedCleaners: currentExt.estimatedCleaners || heuristic.recommendedCleaners || 2,
     estimatedHourlyRate: (currentExt.estimatedCleaners || heuristic.recommendedCleaners || 2) >= 2 ? 105 : 52.5,
     estimatedTotal: currentExt.estimatedTotal || 367.5,
     depositRequired: currentExt.depositRequired || 75,
-    specificNotes: currentExt.specificNotes || "",
+    specificNotes: currentExt.specificNotes || leadFormParsed.specificNotes || "",
   };
 
   // Internal draft calculation ONLY for owner's Jobber Draft Quote (never shared with customer in chat)
@@ -9650,12 +10406,34 @@ async function runFacebookMessengerAiTurn(
   };
   recalcPrice(mergedExtracted);
 
-  const missingFields: string[] = [];
-  if (!mergedExtracted.serviceType) missingFields.push("what type of cleaning (Standard, Deep Clean, or Move-Out)");
-  if (!mergedExtracted.bedrooms || !mergedExtracted.bathrooms) missingFields.push("how many bedrooms and bathrooms (and any special areas like oven, fridge, or baseboards)");
-  if (!mergedExtracted.preferredDate) missingFields.push("your preferred date and morning/afternoon time window");
-  if (!mergedExtracted.address) missingFields.push("the property street address");
-  if (!mergedExtracted.phone) missingFields.push("your best phone number and email so we can send your official quote");
+  // Determine the SINGLE next natural conversational topic (NEVER dump a list of questions at once!)
+  const firstNameOnly =
+    String(mergedExtracted.customerName || "")
+      .replace(/^FB Customer.*/i, "")
+      .replace(/^Facebook.*/i, "")
+      .trim()
+      .split(/\s+/)[0] || "there";
+
+  let nextConversationGoal = "";
+  let fallbackReply = "";
+
+  if (!mergedExtracted.serviceType) {
+    nextConversationGoal =
+      "Step 1 — Start a warm, friendly conversation! Acknowledge what they said and ask ONLY ONE easy question: what kind of cleaning they are looking for (such as a Move-Out clean, Deep clean, or regular clean). Also casually mention that if they ever prefer a quick self-serve form, they can use https://app.tidyupscleaning.com/booking — or we can just chat right here! Do NOT ask for their address, phone number, or bedrooms yet.";
+    fallbackReply = `Hi ${firstNameOnly}! 👋 Thanks so much for reaching out to us! We'd love to help get your place sparkling. To get our chat started, what kind of cleaning are you thinking about (like a Move-Out clean, a Deep clean, or a regular clean)? Or if you'd rather use our quick form anytime, here is our link: https://app.tidyupscleaning.com/booking`;
+  } else if (!mergedExtracted.bedrooms || !mergedExtracted.bathrooms) {
+    nextConversationGoal = `Step 2 — Be warm and enthusiastic about helping with their ${mergedExtracted.serviceType}! Ask ONLY ONE simple conversational question about their home: roughly how many bedrooms and bathrooms it has (and if there are any extra spots like the oven or fridge they want us to focus on). Do NOT ask for their address or phone number yet.`;
+    fallbackReply = `We can definitely help you out with a ${mergedExtracted.serviceType}, ${firstNameOnly}! Tell me a little bit about your place — how many bedrooms and bathrooms does it have, and are there any specific areas (like inside the oven or fridge) you'd like extra attention on?`;
+  } else if (!mergedExtracted.preferredDate) {
+    nextConversationGoal = `Step 3 — Acknowledge their ${mergedExtracted.bedrooms}${mergedExtracted.bathrooms ? `, ${mergedExtracted.bathrooms}` : ""} home warmly! Ask ONLY ONE natural question: when they are hoping to have the cleaning done (what date or morning/afternoon works best for them). Do NOT ask for multiple things at once.`;
+    fallbackReply = `Got it — a ${mergedExtracted.bedrooms}${mergedExtracted.bathrooms ? `, ${mergedExtracted.bathrooms}` : ""} ${mergedExtracted.serviceType} sounds great! When were you hoping to have the cleaning done, and do you prefer a morning or afternoon arrival?`;
+  } else if (!mergedExtracted.phone && !mergedExtracted.email) {
+    nextConversationGoal = `Step 4 — Confirm that ${mergedExtracted.preferredDate} works great for their ${mergedExtracted.bedrooms} ${mergedExtracted.serviceType}! Now naturally ask what the best phone number or email (and general area/address if they'd like to share) is so our owner can send over their personalized quote — or let them know they can pop it into https://app.tidyupscleaning.com/booking if they prefer.`;
+    fallbackReply = `Perfect, we have ${mergedExtracted.preferredDate} noted for your ${mergedExtracted.bedrooms} ${mergedExtracted.serviceType}! What is the best phone number or email to send your custom quote to (or feel free to use our quick link https://app.tidyupscleaning.com/booking if you prefer)?`;
+  } else {
+    nextConversationGoal = `All key info is collected! The client already shared their details (${mergedExtracted.serviceType}, ${mergedExtracted.bedrooms}, ${mergedExtracted.bathrooms}, ${mergedExtracted.preferredDate}, ${mergedExtracted.phone || mergedExtracted.email}). Do NOT re-ask for info they already gave! Warmly thank ${firstNameOnly}, confirm their specific details (and acknowledge any special note they wrote, like keeping their street address private until hired), let them know our owner is reviewing their custom quote right now, and ask if they have any questions for us in the meantime.`;
+    fallbackReply = `Thank you so much for sharing all of those details, ${firstNameOnly}! We have everything noted for your ${mergedExtracted.bedrooms}, ${mergedExtracted.bathrooms} ${mergedExtracted.serviceType} around ${mergedExtracted.preferredDate}${mergedExtracted.timeWindow ? ` (${mergedExtracted.timeWindow})` : ""}. Our owner is putting together your custom quote right now to send over to you — in the meantime, are there any special areas like inside the oven or fridge you want us to make sure we include?`;
+  }
 
   if (ai) {
     try {
@@ -9680,29 +10458,31 @@ async function runFacebookMessengerAiTurn(
         specificNotes: mergedExtracted.specificNotes,
       };
 
-      const prompt = `You are "${botSettings.botName}" replying to a customer on Facebook Messenger for page "${thread.pageName}".
+      const prompt = `You are "${botSettings.botName}" chatting with a client on Facebook Messenger for page "${thread.pageName}".
 Today's Date in Edmonton: ${todayEdmontonStr}.
 
-CRITICAL NON-NEGOTIABLE RULE:
-NEVER discuss, quote, estimate, or mention any dollar prices, hourly rates, or totals to the client! Do NOT output "$" or any price numbers. If the customer asks for a price or estimate, warmly let them know that every home is custom-quoted by our owner based on the exact layout and condition, and once you grab their details here, we will review and send them a proper official quote right away.
+CRITICAL NON-NEGOTIABLE RULES:
+1. NEVER ask for the client's name, address, phone number, service type, and bedrooms all at once in a single message! Have a warm, natural, human conversation and ask at most ONE simple question at a time.
+2. If the client wants a quick self-serve form instead of chatting back and forth, they can always use https://app.tidyupscleaning.com/booking.
+3. NEVER discuss, quote, estimate, or mention any dollar prices, hourly rates, or totals in chat! Do NOT output "$" or any price numbers.
 
 Owner's Custom Instructions:
 ${botSettings.systemPrompt}
 
-Intake Guidelines & Service Info:
+Conversational Flow & Service Notes:
 ${botSettings.pricingRulesSummary}
 
-Current Extracted Lead Info:
+Current Extracted Lead Info Already Known:
 ${JSON.stringify(extractedForAiPrompt)}
 
-Still Missing From Customer:
-${missingFields.length > 0 ? missingFields.join(", ") : "All key fields collected! Thank them and let them know we have prepared their draft file for our owner to review and send their official quote."}
+Your Single Conversational Goal For This Reply:
+${nextConversationGoal}
 
 Full Messenger Conversation So Far:
 ${transcriptText}
 
 Respond in JSON with:
-1. "replyText": Your friendly, concise Facebook Messenger response (2-3 sentences max) that NEVER mentions any prices or dollar amounts, warmly answers general service questions, and asks for the next 1 or 2 missing details (or confirms that all details have been sent to our quoting desk so our owner can review and send their official quote).
+1. "replyText": Your warm, communicative, human-sounding Facebook Messenger response (2-3 short sentences max) that follows "Your Single Conversational Goal For This Reply", NEVER dumps a list of questions at once, and NEVER mentions dollar amounts.
 2. Extracted fields updated from the conversation ("customerName", "phone", "email", "serviceType", "bedrooms", "bathrooms", "preferredDate" in YYYY-MM-DD if mentioned, "timeWindow", "address", "specificNotes", "estimatedHours", "estimatedCleaners"). Leave any unmentioned field as empty string.`;
 
       const response = await withTimeout(
@@ -9765,13 +10545,6 @@ Respond in JSON with:
     }
   }
 
-  // Fallback intelligent conversational reply (Strictly NO prices or dollar amounts)
-  const nextToAsk = missingFields.slice(0, 2).join(" and ");
-  const fallbackReply =
-    missingFields.length > 0
-      ? `Thanks so much for reaching out to TidyUps! Because every home is custom-quoted based on its layout and condition, I'm gathering a few quick details so we can put together a proper quote for you. Could you share ${nextToAsk}, plus any special requests (like inside oven, fridge, or baseboards)?`
-      : `Awesome, thank you ${mergedExtracted.customerName}! I have all your details for ${mergedExtracted.serviceType} (${mergedExtracted.bedrooms}, ${mergedExtracted.bathrooms}) on ${mergedExtracted.preferredDate} at ${mergedExtracted.address}. I've just saved your information and prepared a draft quote for our owner to look over and send directly to you!`;
-
   return {
     replyText: fallbackReply,
     updatedExtracted: mergedExtracted,
@@ -9820,6 +10593,48 @@ async function syncFbThreadToSheetAndOptionallyJobber(
     store.adLeads[existingLeadIdx] = { ...store.adLeads[existingLeadIdx], ...leadItem };
   } else {
     store.adLeads.unshift(leadItem);
+  }
+
+  // Always ensure the Facebook lead is also saved as a client record in store.clients
+  if (!Array.isArray(store.clients)) store.clients = [...INITIAL_CLIENTS];
+  const clientNameClean = (ext.customerName || thread.customerName || "").trim();
+  const normFbPhone = (ext.phone || "").replace(/\D/g, "").slice(-10);
+  if (clientNameClean && !clientNameClean.startsWith("FB Customer") && (normFbPhone.length >= 7 || ext.email)) {
+    const existingCli = store.clients.find((c: any) => {
+      const cPhone = (c.phone || "").replace(/\D/g, "").slice(-10);
+      if (normFbPhone.length >= 7 && cPhone === normFbPhone) return true;
+      if (ext.email && c.email && String(c.email).toLowerCase() === String(ext.email).toLowerCase()) return true;
+      return String(c.name || "").trim().toLowerCase() === clientNameClean.toLowerCase();
+    });
+    if (!existingCli) {
+      const fbClientId = `cli-fb-${thread.psid || Date.now()}`;
+      store.clients.unshift({
+        id: fbClientId,
+        name: clientNameClean,
+        phone: ext.phone || "(780) 555-0199",
+        email: ext.email || "",
+        address: ext.address || "Edmonton, AB",
+        city: (ext.address || "").toLowerCase().includes("st. albert") ? "St. Albert" : "Edmonton",
+        province: "AB",
+        postalCode: (ext.address || "").match(/[A-Z]\d[A-Z]\s*\d[A-Z]\d/i)?.[0]?.toUpperCase() || "",
+        verdict: "Good lead",
+        tags: ["facebook-lead", thread.pageName || "833 Tidyups", ...(thread.syncedQuoteNumber ? [`quote-${thread.syncedQuoteNumber.toLowerCase()}`] : [])],
+        isJobberLinked: false,
+        jobberId: fbClientId,
+        totalJobs: 1,
+        latestServiceDate: ext.preferredDate || new Date().toISOString().slice(0, 10),
+        notes: `[${thread.pageName || "833 Tidyups"}] ${ext.serviceType || "Cleaning"} (${ext.bedrooms || "1 Bedroom"}, ${ext.bathrooms || "1 Bathroom"})${ext.specificNotes ? ` — ${ext.specificNotes}` : ""}`,
+        source: "Facebook",
+        createdAt: thread.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    } else {
+      existingCli.name = clientNameClean;
+      if (ext.phone) existingCli.phone = ext.phone;
+      if (ext.email) existingCli.email = ext.email;
+      if (ext.address && ext.address !== "Edmonton, AB") existingCli.address = ext.address;
+      existingCli.updatedAt = new Date().toISOString();
+    }
   }
 
   let createdOrUpdatedQuote: any = null;
@@ -10266,8 +11081,9 @@ app.post("/api/facebook/sync-existing", async (req, res) => {
         const customerOnlyText = formattedMessages
           .filter((m: any) => m.sender === "customer")
           .map((m: any) => m.text)
-          .join(" . ");
+          .join("\n");
         const heuristic = parseVoiceTicketHeuristic(customerOnlyText);
+        const leadFormParsed = parseFacebookLeadFormFields(customerOnlyText, customerName);
 
         if (!existingThread) {
           existingThread = {
@@ -10275,48 +11091,78 @@ app.post("/api/facebook/sync-existing", async (req, res) => {
             pageSlotId: pg.id || "page_1",
             pageName: pg.pageName,
             psid,
-            customerName,
-            adSourceLabel: pg.adCampaignLabel || "Existing FB Inbox Thread",
+            customerName: leadFormParsed.customerName || customerName,
+            adSourceLabel: leadFormParsed.isLeadForm
+              ? `${pg.pageName} Lead Form`
+              : pg.adCampaignLabel || "Existing FB Inbox Thread",
             aiPaused: false,
-            status: "COLLECTING_INFO",
+            status: leadFormParsed.isLeadForm ? "READY_TO_BOOK" : "COLLECTING_INFO",
             extracted: {
               customerName:
-                heuristic.customerName && heuristic.customerName !== "Residential Client"
+                leadFormParsed.customerName ||
+                (heuristic.customerName && heuristic.customerName !== "Residential Client"
                   ? heuristic.customerName
-                  : customerName,
-              phone: heuristic.phone || "",
-              email: heuristic.email || "",
+                  : customerName),
+              phone: leadFormParsed.phone || heuristic.phone || "",
+              email: leadFormParsed.email || heuristic.email || "",
               serviceType:
-                customerOnlyText.toLowerCase().includes("move")
+                leadFormParsed.serviceType ||
+                (customerOnlyText.toLowerCase().includes("move")
                   ? "Move-Out / Turnover Vacate Cleaning"
                   : customerOnlyText.toLowerCase().includes("deep")
                   ? "Deep Cleaning & Baseboards"
                   : customerOnlyText.toLowerCase().includes("standard")
                   ? "Residential Standard Cleaning"
-                  : "",
-              bedrooms: /\b(\d)\s*bed/i.test(customerOnlyText) ? heuristic.bedrooms : "",
-              bathrooms: /\b(\d(?:\.5)?)\s*bath/i.test(customerOnlyText) ? heuristic.bathrooms : "",
-              preferredDate: heuristic.preferredDate || "",
-              timeWindow: heuristic.timeWindow || "",
-              address: heuristic.address || "",
+                  : ""),
+              bedrooms:
+                leadFormParsed.bedrooms ||
+                (/\b(\d)\s*bed/i.test(customerOnlyText) ? heuristic.bedrooms : ""),
+              bathrooms:
+                leadFormParsed.bathrooms ||
+                (/\b(\d(?:\.5)?)\s*bath/i.test(customerOnlyText) ? heuristic.bathrooms : ""),
+              preferredDate: leadFormParsed.preferredDate || heuristic.preferredDate || "",
+              timeWindow: leadFormParsed.timeWindow || heuristic.timeWindow || "",
+              address: leadFormParsed.address || heuristic.address || "",
               addons: [],
               estimatedHours: heuristic.recommendedHours || 3.5,
               estimatedCleaners: heuristic.recommendedCleaners || 2,
               estimatedHourlyRate: 105,
               estimatedTotal: 427.5,
-              depositRequired: 75,
-              specificNotes: "Synced from existing Facebook Page inbox",
+              depositRequired: 100,
+              specificNotes:
+                leadFormParsed.specificNotes || "Synced from existing Facebook Page inbox",
             },
             messages: formattedMessages,
             updatedAt: convo.updated_time || new Date().toISOString(),
             createdAt: convo.updated_time || new Date().toISOString(),
           };
-          store.fbMessengerThreads.push(existingThread);
+          store.fbMessengerThreads.unshift(existingThread);
           importedCount++;
           pageImported++;
+
+          if (leadFormParsed.isLeadForm || existingThread.extracted.phone || existingThread.extracted.email) {
+            await syncFbThreadToSheetAndOptionallyJobber(store, existingThread, false);
+          }
         } else {
+          existingThread.pageName = pg.pageName;
           existingThread.messages = formattedMessages;
           existingThread.updatedAt = convo.updated_time || new Date().toISOString();
+          if (leadFormParsed.isLeadForm) {
+            existingThread.extracted = {
+              ...existingThread.extracted,
+              customerName: leadFormParsed.customerName || existingThread.extracted?.customerName || customerName,
+              phone: leadFormParsed.phone || existingThread.extracted?.phone || "",
+              email: leadFormParsed.email || existingThread.extracted?.email || "",
+              serviceType: leadFormParsed.serviceType || existingThread.extracted?.serviceType || "",
+              bedrooms: leadFormParsed.bedrooms || existingThread.extracted?.bedrooms || "",
+              bathrooms: leadFormParsed.bathrooms || existingThread.extracted?.bathrooms || "",
+              preferredDate: leadFormParsed.preferredDate || existingThread.extracted?.preferredDate || "",
+              timeWindow: leadFormParsed.timeWindow || existingThread.extracted?.timeWindow || "",
+              address: leadFormParsed.address || existingThread.extracted?.address || "",
+              specificNotes: leadFormParsed.specificNotes || existingThread.extracted?.specificNotes || "",
+            };
+            await syncFbThreadToSheetAndOptionallyJobber(store, existingThread, false);
+          }
           updatedCount++;
           pageImported++;
         }
@@ -10336,6 +11182,13 @@ app.post("/api/facebook/sync-existing", async (req, res) => {
     }
   }
 
+  // Always sort threads newest first by updatedAt so brand-new clients like Donna Noel are at the very top
+  store.fbMessengerThreads.sort(
+    (a: any, b: any) =>
+      (new Date(b.updatedAt || b.createdAt || 0).getTime() || 0) -
+      (new Date(a.updatedAt || a.createdAt || 0).getTime() || 0)
+  );
+
   store.lastSavedAt = new Date().toISOString();
   saveStore(store, projectId);
 
@@ -10346,6 +11199,8 @@ app.post("/api/facebook/sync-existing", async (req, res) => {
     pageReports,
     threads: store.fbMessengerThreads,
     leads: store.adLeads,
+    quotes: store.quotes,
+    clients: store.clients,
   });
 });
 
@@ -10877,66 +11732,81 @@ async function runFacebook24x7BackgroundMonitor() {
 
         if (formattedMessages.length === 0) continue;
         const latestMsg = formattedMessages[formattedMessages.length - 1];
-        const latestMsgTimeMs = new Date(latestMsg.timestamp).getTime() || 0;
+        const latestCustomerMsg = [...formattedMessages].reverse().find((m: any) => m.sender === "customer");
+        const latestMsgTimeMs = new Date((latestCustomerMsg || latestMsg).timestamp).getTime() || 0;
 
-        // Only auto-reply to brand-new incoming customer messages that arrived after server boot
-        if (
-          latestMsg.sender === "customer" &&
-          latestMsgTimeMs >= FB_SERVER_BOOT_MS - 30000
-        ) {
-          let thread = store.fbMessengerThreads.find((t: any) => String(t.psid) === psid);
-          if (thread?.aiPaused) continue;
-          if (thread?.lastRepliedCustomerMsgId === latestMsg.id) continue;
-          if (thread?.messages?.some((m: any) => m.id === latestMsg.id && m.sender !== "customer")) {
-            continue;
+        let thread = store.fbMessengerThreads.find((t: any) => String(t.psid) === psid);
+        const customerName = String(
+          customerParticipant.name || `FB Customer (${psid.slice(-4)})`
+        );
+        const customerOnlyText = formattedMessages
+          .filter((m: any) => m.sender === "customer")
+          .map((m: any) => m.text)
+          .join("\n");
+        const leadFormParsed = parseFacebookLeadFormFields(customerOnlyText, customerName);
+
+        // Always import any brand-new thread into store.fbMessengerThreads (even if Meta's Instant Reply already echoed)
+        if (!thread) {
+          thread = {
+            id: `fb-thread-${psid}`,
+            pageSlotId: pg.id || "page_1",
+            pageName: pg.pageName,
+            psid,
+            customerName: leadFormParsed.customerName || customerName,
+            adSourceLabel: leadFormParsed.isLeadForm
+              ? `${pg.pageName} Lead Form`
+              : pg.adCampaignLabel || "Facebook Messenger",
+            aiPaused: false,
+            status: leadFormParsed.isLeadForm ? "READY_TO_BOOK" : "COLLECTING_INFO",
+            extracted: {
+              customerName: leadFormParsed.customerName || customerName,
+              phone: leadFormParsed.phone || "",
+              email: leadFormParsed.email || "",
+              serviceType: leadFormParsed.serviceType || "",
+              bedrooms: leadFormParsed.bedrooms || "",
+              bathrooms: leadFormParsed.bathrooms || "",
+              preferredDate: leadFormParsed.preferredDate || "",
+              timeWindow: leadFormParsed.timeWindow || "",
+              address: leadFormParsed.address || "",
+              addons: [],
+              estimatedHours: 3.5,
+              estimatedCleaners: 2,
+              estimatedHourlyRate: 105,
+              estimatedTotal: 427.5,
+              depositRequired: 100,
+              specificNotes: leadFormParsed.specificNotes || "",
+            },
+            messages: formattedMessages,
+            updatedAt: convo.updated_time || new Date().toISOString(),
+            createdAt: convo.updated_time || new Date().toISOString(),
+          };
+          store.fbMessengerThreads.unshift(thread);
+          storeModified = true;
+          if (leadFormParsed.isLeadForm || thread.extracted.phone || thread.extracted.email) {
+            await syncFbThreadToSheetAndOptionallyJobber(store, thread, false);
           }
+        }
+
+        // Auto-reply to brand-new customer messages (including when Meta's generic instant-ack fired right after the customer's message)
+        const isLastMsgCustomerOrMetaAutoAck =
+          latestMsg.sender === "customer" ||
+          (latestCustomerMsg && isMetaAutomatedInstantAck(latestMsg.text));
+
+        if (
+          isLastMsgCustomerOrMetaAutoAck &&
+          latestCustomerMsg &&
+          latestMsgTimeMs >= FB_SERVER_BOOT_MS - 3600000
+        ) {
+          if (thread?.aiPaused) continue;
+          if (thread?.lastRepliedCustomerMsgId === latestCustomerMsg.id) continue;
 
           fbInFlightPsids.add(psid);
           try {
-            const customerName = String(
-              customerParticipant.name || `FB Customer (${psid.slice(-4)})`
-            );
-            if (!thread) {
-              thread = {
-                id: `fb-thread-${psid}`,
-                pageSlotId: pg.id || "page_1",
-                pageName: pg.pageName,
-                psid,
-                customerName,
-                adSourceLabel: pg.adCampaignLabel || "Facebook Messenger",
-                aiPaused: false,
-                status: "COLLECTING_INFO",
-                extracted: {
-                  customerName,
-                  phone: "",
-                  email: "",
-                  serviceType: "",
-                  bedrooms: "",
-                  bathrooms: "",
-                  preferredDate: "",
-                  timeWindow: "",
-                  address: "",
-                  addons: [],
-                  estimatedHours: 3.5,
-                  estimatedCleaners: 2,
-                  estimatedHourlyRate: 105,
-                  estimatedTotal: 427.5,
-                  depositRequired: 75,
-                  specificNotes: "",
-                },
-                messages: formattedMessages,
-                updatedAt: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-              };
-              store.fbMessengerThreads.unshift(thread);
-            } else {
-              if (!thread.messages.some((m: any) => m.id === latestMsg.id)) {
-                thread.messages.push(latestMsg);
-              }
-              thread.updatedAt = new Date().toISOString();
+            if (!thread.messages.some((m: any) => m.id === latestCustomerMsg.id)) {
+              thread.messages.push(latestCustomerMsg);
             }
-
-            thread.lastRepliedCustomerMsgId = latestMsg.id;
+            thread.updatedAt = new Date().toISOString();
+            thread.lastRepliedCustomerMsgId = latestCustomerMsg.id;
 
             const { replyText, updatedExtracted } = await runFacebookMessengerAiTurn(
               thread,
@@ -10977,6 +11847,11 @@ async function runFacebook24x7BackgroundMonitor() {
     }
 
     if (storeModified) {
+      store.fbMessengerThreads.sort(
+        (a: any, b: any) =>
+          (new Date(b.updatedAt || b.createdAt || 0).getTime() || 0) -
+          (new Date(a.updatedAt || a.createdAt || 0).getTime() || 0)
+      );
       store.lastSavedAt = new Date().toISOString();
       saveStore(store, "tidyups");
     }
@@ -14121,27 +14996,70 @@ function findCallerCrmMatch(callerNumber: string, store: any): {
   lastQuoteNumber?: string;
   lastQuoteTotal?: number;
   isRepeatClient?: boolean;
+  calledBefore?: boolean;
+  priorCallsCount?: number;
+  lastCalledAt?: string;
 } {
   const callerDigits = normalizePhoneDigits(callerNumber);
   if (!callerDigits || callerDigits.length < 7 || !store) return {};
 
   const clients = Array.isArray(store.clients) ? store.clients : [];
   const quotes = Array.isArray(store.quotes) ? store.quotes : [];
-  const leads = Array.isArray(store.leads) ? store.leads : [];
+  const leads = Array.isArray(store.adLeads)
+    ? store.adLeads
+    : Array.isArray(store.leads)
+    ? store.leads
+    : [];
+  const quoCalls = Array.isArray(store.quoCallLogs) ? store.quoCallLogs : [];
+  const recentInbound = Array.isArray(store.recentInboundCalls) ? store.recentInboundCalls : [];
 
   const matchedClient = clients.find((c: any) => normalizePhoneDigits(c.phone || "") === callerDigits);
   const matchedQuote = quotes.find((q: any) => normalizePhoneDigits(q.clientPhone || q.phone || "") === callerDigits);
   const matchedLead = leads.find((l: any) => normalizePhoneDigits(l.phone || "") === callerDigits);
 
-  if (!matchedClient && !matchedQuote && !matchedLead) return {};
+  const matchingQuoCalls = quoCalls.filter(
+    (q: any) => normalizePhoneDigits(q.callerPhone || q.from || "") === callerDigits
+  );
+  const matchingRecentInbound = recentInbound.filter(
+    (r: any) => normalizePhoneDigits(r.callerNumber || "") === callerDigits
+  );
+
+  // Deduplicate call timestamps by 90-second buckets
+  const callTimeBuckets = new Set<number>();
+  let latestCallIso: string | undefined;
+  for (const c of [...matchingQuoCalls, ...matchingRecentInbound]) {
+    const ts = c.timestamp || c.createdAt;
+    if (ts) {
+      const ms = new Date(ts).getTime();
+      if (!isNaN(ms)) {
+        callTimeBuckets.add(Math.floor(ms / 90000));
+        if (!latestCallIso || ms > new Date(latestCallIso).getTime()) {
+          latestCallIso = new Date(ms).toISOString();
+        }
+      }
+    }
+  }
+
+  const priorCallsCount = Math.max(
+    callTimeBuckets.size,
+    matchedClient || matchedQuote || matchedLead ? 1 : 0
+  );
+  const calledBefore = Boolean(
+    priorCallsCount > 1 || matchedClient || matchedQuote || matchedLead
+  );
+
+  if (!matchedClient && !matchedQuote && !matchedLead && priorCallsCount === 0) return {};
 
   return {
     matchedClientName: matchedClient?.name || matchedQuote?.clientName || matchedLead?.customerName || undefined,
-    matchedAddress: matchedClient?.address || matchedQuote?.propertyAddress || matchedLead?.address || undefined,
+    matchedAddress: matchedClient?.address || matchedQuote?.propertyAddress || matchedQuote?.serviceAddress || matchedLead?.address || undefined,
     matchedEmail: matchedClient?.email || matchedQuote?.clientEmail || matchedLead?.email || undefined,
     lastQuoteNumber: matchedQuote?.quoteNumber || undefined,
     lastQuoteTotal: typeof matchedQuote?.total === "number" ? matchedQuote.total : undefined,
-    isRepeatClient: Boolean(matchedClient || matchedQuote),
+    isRepeatClient: Boolean(matchedClient || matchedQuote || priorCallsCount > 1),
+    calledBefore,
+    priorCallsCount,
+    lastCalledAt: latestCallIso || matchedQuote?.createdAt || matchedLead?.createdAt || undefined,
   };
 }
 
@@ -14364,6 +15282,9 @@ function quoLogToScreenerRecord(q: any, store: any): any {
     lastQuoteNumber: crm.lastQuoteNumber || "",
     lastQuoteTotal: crm.lastQuoteTotal,
     isRepeatClient: Boolean(crm.isRepeatClient),
+    calledBefore: Boolean(crm.calledBefore),
+    priorCallsCount: crm.priorCallsCount || 1,
+    lastCalledAt: crm.lastCalledAt || q.timestamp || q.createdAt,
     transcriptText: q.transcriptText || "",
     summary: q.summary || "",
     countryCode: "+1",
@@ -14442,11 +15363,22 @@ app.get("/api/twilio/live-calls", async (req, res) => {
   const rawRecent = Array.isArray(store?.recentInboundCalls) ? store.recentInboundCalls : [];
   const enrichedRecent = rawRecent.map((c: any) => {
     const isDismissed = Boolean(c.dismissedInHud || dismissedHudCallIds.has(c.id) || dismissedHudCallIds.has(c.callSid));
+    const crm = findCallerCrmMatch(c.callerNumber || "", store);
     if (c.originalDialedNumber && c.campaignLabel) {
-      return { ...c, dismissedInHud: isDismissed };
+      return {
+        ...c,
+        callerName: crm.matchedClientName || c.callerName || "Inbound Caller",
+        matchedAddress: crm.matchedAddress || c.matchedAddress || "",
+        lastQuoteNumber: crm.lastQuoteNumber || c.lastQuoteNumber || "",
+        lastQuoteTotal: crm.lastQuoteTotal ?? c.lastQuoteTotal,
+        isRepeatClient: Boolean(crm.isRepeatClient || c.isRepeatClient),
+        calledBefore: Boolean(crm.calledBefore || c.calledBefore),
+        priorCallsCount: crm.priorCallsCount || c.priorCallsCount || 1,
+        lastCalledAt: crm.lastCalledAt || c.lastCalledAt,
+        dismissedInHud: isDismissed,
+      };
     }
     const attr = resolveOriginalDialedLineInfo(c.dialedNumber || "+18255334317", c.forwardedFrom);
-    const crm = findCallerCrmMatch(c.callerNumber || "", store);
     const dest = c.destinationNumber || store?.spamShieldConfig?.forwardDestinationNumber || "+15875708005";
     return {
       ...c,
@@ -14460,6 +15392,9 @@ app.get("/api/twilio/live-calls", async (req, res) => {
       lastQuoteNumber: crm.lastQuoteNumber || c.lastQuoteNumber || "",
       lastQuoteTotal: crm.lastQuoteTotal ?? c.lastQuoteTotal,
       isRepeatClient: Boolean(crm.isRepeatClient || c.isRepeatClient),
+      calledBefore: Boolean(crm.calledBefore || c.calledBefore),
+      priorCallsCount: crm.priorCallsCount || c.priorCallsCount || 1,
+      lastCalledAt: crm.lastCalledAt || c.lastCalledAt,
       dismissedInHud: isDismissed,
     };
   });

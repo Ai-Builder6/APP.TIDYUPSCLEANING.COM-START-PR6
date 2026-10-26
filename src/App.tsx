@@ -71,6 +71,7 @@ import {
   saveQuoteToFirestore, 
   saveInvoiceToFirestore, 
   saveVanOverrideToFirestore, 
+  fetchVanOverridesFromFirestore,
   saveBlockedNumberToFirestore,
   deleteBlockedNumberFromFirestore,
   saveScreenedCallToFirestore,
@@ -79,6 +80,7 @@ import {
   syncAllToFirestore,
   FIRESTORE_DATABASE_ID
 } from './services/firestoreSyncService';
+import { saveAndDownloadNumberedProjectBackupZip } from './services/googleDriveBackupService';
 import { onFirebaseAuthStateChanged, getAccessTokenSync } from './lib/firebase';
 import { TeamChatDrawer } from './components/TeamChatDrawer';
 import { RoleSelectorModal } from './components/RoleSelectorModal';
@@ -287,8 +289,6 @@ export function App() {
   const [mapsAuthError, setMapsAuthError] = useState<boolean>(false);
   const [refererErrorUrl, setRefererErrorUrl] = useState<string | null>(null);
   const [quotaExceeded, setQuotaExceeded] = useState<boolean>(false);
-  const [technicians, setTechnicians] = useState<Technician[]>(INITIAL_TECHNICIANS);
-
   // Read locally cached dispatch data immediately so user entries never vanish on refresh
   const storedData = typeof window !== 'undefined' ? (() => {
     try {
@@ -298,6 +298,21 @@ export function App() {
       return null;
     }
   })() : null;
+
+  const [technicians, setTechnicians] = useState<Technician[]>(() => {
+    if (storedData?.technicians && Array.isArray(storedData.technicians) && storedData.technicians.length > 0) {
+      return storedData.technicians.map((t: Technician, idx: number) => {
+        const canonical = INITIAL_TECHNICIANS.find((c) => c.id === t.id) || INITIAL_TECHNICIANS[idx];
+        const hasGenericUnit = !t.vanNumber || /^unit\s+\d+$/i.test(String(t.vanNumber).trim());
+        return {
+          ...t,
+          vanNumber: hasGenericUnit && canonical?.vanNumber ? canonical.vanNumber : t.vanNumber,
+          color: t.color || canonical?.color || '#EC4899',
+        };
+      });
+    }
+    return INITIAL_TECHNICIANS;
+  });
 
   const [tickets, setTickets] = useState<ServiceTicket[]>(() => {
     const raw = (storedData?.tickets && storedData.tickets.length > 0) ? storedData.tickets : INITIAL_TICKETS;
@@ -552,7 +567,12 @@ export function App() {
       !j.clientName?.includes('Lindqvist')
     );
   });
-  const [staffList, setStaffList] = useState<JobberStaffMember[]>(() => CANONICAL_JOBBER_STAFF);
+  const [staffList, setStaffList] = useState<JobberStaffMember[]>(() => {
+    if (storedData?.staffRoster && Array.isArray(storedData.staffRoster) && storedData.staffRoster.length > 0) {
+      return storedData.staffRoster;
+    }
+    return CANONICAL_JOBBER_STAFF;
+  });
   const [clientsList, setClientsList] = useState<ClientRecord[]>(() => {
     const base = (storedData?.clients && storedData.clients.length > 0) ? storedData.clients : INITIAL_CLIENTS;
     const hasDevon = base.some((c: ClientRecord) => c.name?.toLowerCase().includes('devon clark') || (c.phone || '').includes('802-4918'));
@@ -643,6 +663,7 @@ export function App() {
   // Streamlined Top Header Main Workflow Buttons (All secondary owner buttons live inside MANAGEMENT / Owner Hub)
   const DEFAULT_HEADER_NAV_ORDER = [
     'MASTER_HUB',
+    'QUOTES',
     'FB_MESSENGER_AI',
     'QUICK_QUOTE',
     'MAP',
@@ -652,16 +673,28 @@ export function App() {
   ];
 
   const DEFAULT_FOOTER_BTN_ORDER = [
+    'QUOTES',
     'FB_MESSENGER_AI',
+    'VOICE_DICTATION',
     'PASTE_TABLE',
     'MASTER_TABLE',
     'QUICK_MAPS',
     'MANAGEMENT',
     'DISPATCH_MAP',
     'SCHEDULE_SEARCH',
+    'BACKUP_ZIP',
     'SYNC_ALL',
     'BLOCK_SPAM',
   ];
+
+  const [isGpsBannerApprovedOnce, setIsGpsBannerApprovedOnce] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return localStorage.getItem('tidyups_gps_banner_approved_v1') === 'true';
+      } catch {}
+    }
+    return false;
+  });
 
   const [headerNavOrder, setHeaderNavOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
@@ -685,7 +718,7 @@ export function App() {
   const [footerBtnOrder, setFooterBtnOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('tidyups_footer_btn_order_v3');
+        const saved = localStorage.getItem('tidyups_footer_btn_order_v4');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -1591,10 +1624,26 @@ export function App() {
     setStaffList(updatedStaff);
     const updatedTechs = updatedStaff.map((s, idx) => staffMemberToTechnician(s, idx));
     setTechnicians(updatedTechs);
-    fetch('/api/store/save', {
+    const overridesPatch: Record<string, any> = {};
+    updatedTechs.forEach((t) => {
+      overridesPatch[t.id] = {
+        id: t.id,
+        name: t.name,
+        vanNumber: t.vanNumber,
+        vanUnit: t.vanNumber,
+        phone: t.phone,
+        email: t.email,
+        color: t.color,
+        homeAddress: t.homeAddress,
+        depotLocation: t.depotLocation,
+        currentLocation: t.currentLocation,
+      };
+      saveVanOverrideToFirestore(t).catch(() => {});
+    });
+    fetch('/api/store/save?project=tidyups', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ staffRoster: updatedStaff }),
+      headers: { 'Content-Type': 'application/json', 'x-project-id': 'tidyups' },
+      body: JSON.stringify({ staffRoster: updatedStaff, cleanerOverrides: overridesPatch }),
     }).catch(() => {});
   }, []);
 
@@ -1729,17 +1778,26 @@ export function App() {
       const next = prev.map((t) => (t.id === updatedTech.id ? updatedTech : t));
       return next;
     });
-    // Also sync to staff roster
+    // Also sync to staff roster (matching by cleaner index, ID, email, or name)
     setStaffList((prev) => {
-      const nextStaff = prev.map((s) => {
-        if (s.name.toLowerCase() === updatedTech.name.toLowerCase() || s.id === updatedTech.id) {
+      const nextStaff = prev.map((s, idx) => {
+        const expectedCleanerId = `cleaner-${idx + 1}`;
+        const isMatch =
+          expectedCleanerId === updatedTech.id ||
+          s.id === updatedTech.id ||
+          (s.email && updatedTech.email && s.email.toLowerCase() === updatedTech.email.toLowerCase()) ||
+          s.name.toLowerCase() === updatedTech.name.toLowerCase();
+        if (isMatch) {
           return {
             ...s,
             name: updatedTech.name,
             phone: updatedTech.phone || s.phone,
-            homeAddress: updatedTech.homeAddress || s.homeAddress,
+            email: updatedTech.email || s.email,
+            homeAddress: updatedTech.homeAddress || updatedTech.depotLocation?.address || s.homeAddress,
             vanUnit: updatedTech.vanNumber || s.vanUnit,
             color: updatedTech.color || s.color,
+            lat: updatedTech.depotLocation?.lat || updatedTech.currentLocation?.lat || s.lat,
+            lng: updatedTech.depotLocation?.lng || updatedTech.currentLocation?.lng || s.lng,
           };
         }
         return s;
@@ -1752,29 +1810,37 @@ export function App() {
       return nextStaff;
     });
 
-    // Save home hub coordinates & address to backend
+    // Save home hub coordinates & address + vanNumber & color to backend
     fetch('/api/technicians/update-hub', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cleanerId: updatedTech.id,
+        name: updatedTech.name,
+        vanNumber: updatedTech.vanNumber,
+        phone: updatedTech.phone,
+        email: updatedTech.email,
+        color: updatedTech.color,
         homeAddress: updatedTech.homeAddress || updatedTech.depotLocation?.address,
-        hubName: updatedTech.depotLocation?.name,
+        hubName: updatedTech.depotLocation?.name || updatedTech.vanNumber,
         lat: updatedTech.depotLocation?.lat,
         lng: updatedTech.depotLocation?.lng,
       }),
     }).catch((err) => console.warn('Update hub note:', err));
 
     // Save cleanerOverrides to persistent JSON store
-    fetch('/api/store/save', {
+    fetch('/api/store/save?project=tidyups', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-project-id': 'tidyups' },
       body: JSON.stringify({
         cleanerOverrides: {
           [updatedTech.id]: {
+            id: updatedTech.id,
             name: updatedTech.name,
             vanNumber: updatedTech.vanNumber,
+            vanUnit: updatedTech.vanNumber,
             phone: updatedTech.phone,
+            email: updatedTech.email,
             color: updatedTech.color,
             homeAddress: updatedTech.homeAddress,
             depotLocation: updatedTech.depotLocation,
@@ -1788,13 +1854,13 @@ export function App() {
     saveVanOverrideToFirestore(updatedTech).catch(() => {});
   }, []);
 
-  // Load persistent store on mount & handle direct URL deep linking (/book, /support, /quotes, /invoices, /unscheduled, /staff)
+  // Load persistent store on mount & handle direct URL deep linking (/booking, /book, /support, /quotes, /invoices, /unscheduled, /staff)
   useEffect(() => {
     // Check initial path or hash
     if (typeof window !== 'undefined') {
       const path = window.location.pathname.toLowerCase();
       const hash = window.location.hash.toLowerCase();
-      if (path === '/book' || hash === '#book' || path.startsWith('/book/')) {
+      if (path === '/booking' || path.startsWith('/booking/') || hash === '#booking' || path === '/book' || hash === '#book' || path.startsWith('/book/')) {
         setActiveTopView('CUSTOMER_PORTAL');
       } else if (path === '/master' || hash === '#master' || path === '/master-table' || hash === '#master-table') {
         setActiveTopView('MASTER_HUB');
@@ -1890,14 +1956,18 @@ export function App() {
           if (data.staffRoster && data.staffRoster.length > 0) {
             setStaffList(data.staffRoster);
             const baseTechs = data.staffRoster.map((s: JobberStaffMember, idx: number) => staffMemberToTechnician(s, idx));
-            const overrides = data.cleanerOverrides || {};
+            const rawOverrides = data.cleanerOverrides || {};
             const finalTechs = baseTechs.map((t: Technician) => {
-              const ov = overrides[t.id];
+              const ov = Array.isArray(rawOverrides)
+                ? rawOverrides.find((o: any) => o && o.id === t.id)
+                : rawOverrides[t.id];
               const assignedIds = cleanTickets.filter((tk: ServiceTicket) => tk.assignedTechId === t.id).map((tk: ServiceTicket) => tk.id);
               if (!ov) return { ...t, assignedTicketIds: assignedIds };
               return {
                 ...t,
                 ...ov,
+                vanNumber: ov.vanNumber || ov.vanUnit || t.vanNumber,
+                color: ov.color || t.color,
                 assignedTicketIds: assignedIds,
                 depotLocation: { ...t.depotLocation, ...(ov.depotLocation || {}) },
                 currentLocation: { ...t.currentLocation, ...(ov.currentLocation || {}) },
@@ -1905,15 +1975,19 @@ export function App() {
             });
             setTechnicians(finalTechs);
           } else {
-            const overrides = data.cleanerOverrides || {};
+            const rawOverrides = data.cleanerOverrides || {};
             setTechnicians((prev) =>
               prev.map((t) => {
-                const ov = overrides[t.id];
+                const ov = Array.isArray(rawOverrides)
+                  ? rawOverrides.find((o: any) => o && o.id === t.id)
+                  : rawOverrides[t.id];
                 const assignedIds = cleanTickets.filter((tk: ServiceTicket) => tk.assignedTechId === t.id).map((tk: ServiceTicket) => tk.id);
                 if (!ov) return { ...t, assignedTicketIds: assignedIds };
                 return {
                   ...t,
                   ...ov,
+                  vanNumber: ov.vanNumber || ov.vanUnit || t.vanNumber,
+                  color: ov.color || t.color,
                   assignedTicketIds: assignedIds,
                   depotLocation: { ...t.depotLocation, ...(ov.depotLocation || {}) },
                   currentLocation: { ...t.currentLocation, ...(ov.currentLocation || {}) },
@@ -1921,6 +1995,28 @@ export function App() {
               })
             );
           }
+
+          // Also fetch cloud vanOverrides from Firestore so edits made on any device sync immediately
+          fetchVanOverridesFromFirestore()
+            .then((cloudMap) => {
+              if (!cloudMap || Object.keys(cloudMap).length === 0) return;
+              setTechnicians((prev) =>
+                prev.map((t) => {
+                  const cloud = cloudMap[t.id];
+                  if (!cloud) return t;
+                  const hasValidVan = cloud.vanNumber && !/^unit\s+\d+$/i.test(String(cloud.vanNumber).trim());
+                  return {
+                    ...t,
+                    name: cloud.name || t.name,
+                    vanNumber: hasValidVan ? cloud.vanNumber : t.vanNumber,
+                    color: cloud.color || t.color,
+                    phone: cloud.phone || t.phone,
+                    homeAddress: cloud.homeAddress || t.homeAddress,
+                  };
+                })
+              );
+            })
+            .catch(() => {});
           if (data.quotes && data.quotes.length > 0) {
             setQuotesList((prev) => dedupeQuotesList([...data.quotes, ...prev]));
           }
@@ -2056,6 +2152,7 @@ export function App() {
         const payload = {
           tickets,
           technicians,
+          staffRoster: staffList,
           scheduledVisits: scheduledJobsList,
           unscheduledJobs: unscheduledJobsList,
           clients: clientsList,
@@ -2074,7 +2171,7 @@ export function App() {
     } catch (err) {
       console.warn('Auto-save error:', err);
     }
-  }, [activeProjectId, tickets, technicians, scheduledJobsList, unscheduledJobsList, clientsList, quotesList, invoicesList, serviceCatalog, quoCallsList, spamShieldConfig, blockedCallsHistory, leadsList]);
+  }, [activeProjectId, tickets, technicians, staffList, scheduledJobsList, unscheduledJobsList, clientsList, quotesList, invoicesList, serviceCatalog, quoCallsList, spamShieldConfig, blockedCallsHistory, leadsList]);
 
   // Save tickets to local persistent database whenever updated
   const saveStateToStore = useCallback((updatedTickets: ServiceTicket[]) => {
@@ -2591,7 +2688,7 @@ export function App() {
         setMapsAuthError(true);
       }}
     >
-      <div id="cleaning-dispatch-app" className="w-screen h-screen bg-slate-50 text-slate-900 font-sans select-none overflow-x-auto overflow-y-auto">
+      <div id="cleaning-dispatch-app" className="w-screen h-screen bg-slate-50 text-slate-900 font-sans select-none overflow-hidden flex flex-col">
         <div
           className={`${
             deviceOverride === 'IPHONE'
@@ -2602,8 +2699,8 @@ export function App() {
               ? 'min-w-[1380px]'
               : isStandaloneBookingDomain || isCustomerLockPreview || activeTopView === 'CUSTOMER_PORTAL'
               ? 'w-full'
-              : 'w-full xl:min-w-[1380px]'
-          } min-h-full h-full flex flex-col ${
+              : 'w-full'
+          } h-full max-h-screen overflow-hidden flex flex-col ${
             !isZenMode && isStaffAuthenticated && !isStandaloneBookingDomain && !isCustomerLockPreview && deviceOverride !== 'DESKTOP'
               ? 'pb-[58px] xl:pb-0'
               : ''
@@ -2681,36 +2778,49 @@ export function App() {
           </header>
         )}
 
-        {/* Mandatory Live Cell Phone GPS Prompt Banner for Authenticated Staff / Cleaners */}
+        {/* Ultra-Small One-Time Live Cell Phone GPS Banner (Paused for Owner & Hidden Permanently Once Approved Once) */}
         {!isZenMode &&
           isStaffAuthenticated &&
           !isStandaloneBookingDomain &&
           !isCustomerLockPreview &&
+          currentUser.role !== 'OWNER' &&
+          !isGpsBannerApprovedOnce &&
           currentUser.requireLiveLocation !== false &&
           myGpsStatus !== 'ACTIVE' && (
-            <div className="bg-gradient-to-r from-emerald-950 via-teal-900 to-cyan-950 text-white px-4 py-2.5 border-b border-emerald-400/60 flex flex-wrap items-center justify-between gap-3 z-30 shadow-md">
-              <div className="flex items-center gap-2.5 text-xs">
-                <span className="px-2 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[10px] uppercase tracking-wider flex items-center gap-1 shrink-0">
-                  <Navigation className="w-3 h-3" />
-                  <span>Required on Cell Phone</span>
-                </span>
-                <span>
-                  <strong>📍 Live Location Required ({currentUser.name}):</strong> Please allow your cell phone GPS location so the Owner &amp; Dispatch can see your live route location at all times.
-                  {myGpsStatus === 'DENIED' && (
-                    <span className="text-amber-300 font-bold ml-1">
-                      (If blocked on your phone: open browser Settings → Site Settings → Location → Allow)
-                    </span>
-                  )}
+            <div className="bg-slate-900 text-slate-200 px-3 py-1 border-b border-emerald-500/40 flex items-center justify-between gap-2 z-30 text-[11px]">
+              <div className="flex items-center gap-1.5 truncate">
+                <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="truncate">
+                  <strong>Live Route GPS ({currentUser.name}):</strong> Approve once to share your route location.
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => handleRequestDeviceLocation(currentUser)}
-                className="px-3.5 py-1.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0 active:scale-95"
-              >
-                <MapPin className="w-3.5 h-3.5" />
-                <span>Allow My Live Cell Phone Location Now</span>
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      localStorage.setItem('tidyups_gps_banner_approved_v1', 'true');
+                    } catch {}
+                    setIsGpsBannerApprovedOnce(true);
+                    handleRequestDeviceLocation(currentUser);
+                  }}
+                  className="px-2.5 py-0.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[10px] cursor-pointer"
+                >
+                  Approve Once
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      localStorage.setItem('tidyups_gps_banner_approved_v1', 'true');
+                    } catch {}
+                    setIsGpsBannerApprovedOnce(true);
+                  }}
+                  className="px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] cursor-pointer"
+                >
+                  Pause Banner
+                </button>
+              </div>
             </div>
           )}
 
@@ -2839,6 +2949,27 @@ export function App() {
                             activeTopView === 'MASTER_HUB' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'
                           }`}>
                             {leadsList.length + quotesList.length}
+                          </span>
+                        </button>
+                      );
+                    } else if (btnKey === 'QUOTES') {
+                      buttonElement = (
+                        <button
+                          id="nav-tab-quotes"
+                          onClick={() => setActiveTopView('QUOTES')}
+                          className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeTopView === 'QUOTES'
+                              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-sm ring-2 ring-amber-400/40'
+                              : 'bg-amber-50 text-amber-950 hover:bg-amber-100 border border-amber-300'
+                          }`}
+                          title="Drag left/right to rearrange • 1-Click Open All Jobber & Local Quotes"
+                        >
+                          <span>📋</span>
+                          <span>Quotes</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                            activeTopView === 'QUOTES' ? 'bg-slate-950/20 text-slate-950 font-black' : 'bg-amber-200/80 text-amber-950'
+                          }`}>
+                            {quotesList.length}
                           </span>
                         </button>
                       );
@@ -3065,6 +3196,8 @@ export function App() {
           </header>
         )}
 
+        {/* Scrollable Active View Container so Global Header & Footer Button Bars stay pinned on ALL pages (including Owner's Hub & Voice Dictation) */}
+        <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden flex flex-col relative">
         {/* Standalone /thank-you Google Ads Conversion Page OR Customer Booking Domain (book.tidyupscleaning.com) */}
         {isThankYouConversionRoute ? (
           <ThankYouConversionPage
@@ -3072,7 +3205,7 @@ export function App() {
             onBackToBookingForm={() => {
               setIsThankYouConversionRoute(false);
               try {
-                window.history.pushState({}, '', '/book');
+                window.history.pushState({}, '', '/booking');
               } catch {}
             }}
             onReturnToStaffConsole={() => {
@@ -3101,6 +3234,7 @@ export function App() {
               if (Array.isArray(reconnected.quotes)) handleQuotesUpdated(reconnected.quotes);
             }}
             onBookingSubmitted={(ticket, fullPayload) => {
+              setIsThankYouConversionRoute(true);
               setTickets((prev) => [ticket, ...prev]);
               saveStateToStore([ticket, ...tickets]);
               if (fullPayload?.lead) {
@@ -3537,6 +3671,15 @@ export function App() {
               setScheduledJobsSubTab('CALENDAR');
             }}
             onNavigateToIntakes={() => setActiveTopView('INTAKES')}
+            onNavigateToMasterHub={() => {
+              setMasterHubFocusBlock('ALL');
+              setActiveTopView('MASTER_HUB');
+            }}
+            onNavigateToManagement={() => setActiveTopView('MANAGEMENT')}
+            onNavigateToQuotes={() => setActiveTopView('QUOTES')}
+            onNavigateToFbMessengerAi={() => setActiveTopView('FB_MESSENGER_AI')}
+            onNavigateToAddressRadar={() => setActiveTopView('ADDRESS_SEARCH')}
+            onNavigateToClients={() => setActiveTopView('CLIENTS')}
             calls={quoCallsList}
             visits={scheduledJobsList}
             clients={clientsList}
@@ -3799,19 +3942,20 @@ export function App() {
           </section>
         </main>
         )}
+        </div>
 
         {/* Global Quick-Link Footer Bar (Hidden on book.tidyupscleaning.com and Customer Lock Preview so customers cannot access staff tools) */}
         {!isZenMode && !isStandaloneBookingDomain && !isCustomerLockPreview && (
           <footer
             id="global-footer"
-            className={`min-h-[44px] py-1.5 bg-slate-900 text-slate-300 flex flex-wrap items-center px-3 sm:px-5 justify-between gap-2 text-xs shrink-0 font-medium z-30 border-t border-slate-700 shadow-lg ${
+            className={`py-0.5 bg-slate-900 text-slate-300 flex flex-nowrap items-center px-2 sm:px-3 justify-between gap-1.5 text-[10px] shrink-0 font-medium z-30 border-t border-slate-800 overflow-x-auto no-scrollbar whitespace-nowrap ${
               footerButtonsSide === 'right' ? 'flex-row' : 'flex-row-reverse'
             }`}
           >
-            {/* Status, Legal Links & Rearrange Controls (Sits on the Left when Footer Buttons are on the Right) */}
-            <div className="flex flex-wrap items-center gap-2.5 text-[11px]">
+            {/* Status, Legal Links & Rearrange Controls */}
+            <div className="flex items-center gap-1.5 text-[10px] shrink-0">
               <span className="text-pink-400 font-mono font-bold">1-833-TIDYUPS</span>
-              <div className="hidden sm:flex items-center gap-2 border-l border-slate-700 pl-2.5">
+              <div className="hidden lg:flex items-center gap-1.5 border-l border-slate-700 pl-1.5">
                 <button
                   onClick={() => {
                     setActiveLegalTab('SUPPORT');
@@ -3839,27 +3983,23 @@ export function App() {
                   }}
                   className="hover:text-white cursor-pointer"
                 >
-                  /privacy-policy
+                  /privacy
                 </button>
-              </div>
-              <div className="hidden xl:flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                <span className="uppercase tracking-widest text-slate-300 text-[10px]">TidyUps Master v4.25</span>
               </div>
 
               {/* Rearrange Header & Footer Buttons Control */}
-              <div className="flex items-center gap-1.5 border-l border-slate-700 pl-2.5">
+              <div className="flex items-center gap-1 border-l border-slate-700 pl-1.5">
                 <button
                   type="button"
                   onClick={() => setIsRearrangingBars((prev) => !prev)}
-                  className={`px-2.5 py-1 rounded-xl text-[11px] font-black flex items-center gap-1 cursor-pointer transition-all border ${
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all border ${
                     isRearrangingBars
-                      ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md'
+                      ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-xs'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
                   }`}
                   title="Rearrange Header or Footer buttons from left to right (or drag any button directly)"
                 >
-                  <span>⇄ {isRearrangingBars ? 'Done Rearranging' : 'Rearrange Header / Footer'}</span>
+                  <span>⇄ {isRearrangingBars ? 'Done' : 'Rearrange'}</span>
                 </button>
 
                 {isRearrangingBars && (
@@ -3867,10 +4007,10 @@ export function App() {
                     <button
                       type="button"
                       onClick={() => toggleFooterSide(footerButtonsSide === 'right' ? 'left' : 'right')}
-                      className="px-2 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-extrabold cursor-pointer"
+                      className="px-1.5 py-0.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-extrabold cursor-pointer"
                       title="Move all footer buttons between Left Side and Right Side"
                     >
-                      Footer Side: {footerButtonsSide === 'right' ? 'Right → (Switch to Left)' : '← Left (Switch to Right)'}
+                      {footerButtonsSide === 'right' ? 'Right →' : '← Left'}
                     </button>
                     <button
                       type="button"
@@ -3879,22 +4019,40 @@ export function App() {
                         updateFooterOrder(DEFAULT_FOOTER_BTN_ORDER);
                         toggleFooterSide('right');
                       }}
-                      className="px-2 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 text-[10px] font-bold cursor-pointer"
+                      className="px-1.5 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 text-[9px] font-bold cursor-pointer"
                       title="Reset Header and Footer button positions to default"
                     >
-                      Reset Order
+                      Reset
                     </button>
                   </>
                 )}
               </div>
             </div>
 
-            {/* Right-Hand Side (by default): Rearrangeable Footer Action Buttons including Management & Block Spam Caller */}
-            <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 ml-auto">
+            {/* Right-Hand Side (by default): Single-Line Rearrangeable Footer Action Buttons */}
+            <div className="flex flex-nowrap items-center justify-end gap-1 ml-auto shrink-0">
               {footerBtnOrder.map((btnKey, idx) => {
                 let btnNode: React.ReactNode = null;
 
-                if (btnKey === 'FB_MESSENGER_AI') {
+                if (btnKey === 'QUOTES') {
+                  btnNode = (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsStaffAuthenticated(true);
+                        setActiveTopView('QUOTES');
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
+                        activeTopView === 'QUOTES'
+                          ? 'bg-amber-500 text-slate-950 ring-1 ring-amber-300'
+                          : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                      }`}
+                      title="Drag left/right to rearrange • 1-Click Open All Quotes"
+                    >
+                      <span>📋 Quotes ({quotesList.length})</span>
+                    </button>
+                  );
+                } else if (btnKey === 'FB_MESSENGER_AI') {
                   btnNode = (
                     <button
                       type="button"
@@ -3902,15 +4060,15 @@ export function App() {
                         setIsStaffAuthenticated(true);
                         setActiveTopView('FB_MESSENGER_AI');
                       }}
-                      className={`px-3 py-1 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs ${
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'FB_MESSENGER_AI'
-                          ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white ring-2 ring-blue-300'
+                          ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white ring-1 ring-blue-300'
                           : 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/40'
                       }`}
                       title="Drag left/right to rearrange • 3-Page Facebook Messenger AI Bot & Conversation Board"
                     >
-                      <MessageSquare className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                      <span>Facebook AI (3 Pages)</span>
+                      <MessageSquare className="w-3 h-3 text-blue-400 shrink-0" />
+                      <span>Facebook AI</span>
                     </button>
                   );
                 } else if (btnKey === 'PASTE_TABLE') {
@@ -3922,15 +4080,15 @@ export function App() {
                         setMasterHubFocusBlock('PASTE_TABLE');
                         setActiveTopView('MASTER_HUB');
                       }}
-                      className={`px-3 py-1 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs ${
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'MASTER_HUB' && masterHubFocusBlock === 'PASTE_TABLE'
-                          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+                          ? 'bg-amber-500 text-slate-950 ring-1 ring-amber-300'
                           : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
                       }`}
                       title="Drag left/right to rearrange • Quicklink: Paste Quotes & Pasted Leads Table"
                     >
-                      <ClipboardPaste className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>Paste Table (Paste Quotes &amp; Leads)</span>
+                      <ClipboardPaste className="w-3 h-3 text-amber-400 shrink-0" />
+                      <span>Paste Table</span>
                     </button>
                   );
                 } else if (btnKey === 'MASTER_TABLE') {
@@ -3942,15 +4100,15 @@ export function App() {
                         setMasterHubFocusBlock('MASTER_TABLE');
                         setActiveTopView('MASTER_HUB');
                       }}
-                      className={`px-3 py-1 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs ${
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'MASTER_HUB' && (masterHubFocusBlock === 'MASTER_TABLE' || masterHubFocusBlock === 'ALL')
-                          ? 'bg-emerald-500 text-slate-950 ring-2 ring-emerald-300'
+                          ? 'bg-emerald-500 text-slate-950 ring-1 ring-emerald-300'
                           : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
                       }`}
                       title="Drag left/right to rearrange • Open TidyUps Master Leads & Quotes Table"
                     >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span>Master Leads &amp; Quotes Table</span>
+                      <FileSpreadsheet className="w-3 h-3 text-emerald-400 shrink-0" />
+                      <span>Master Leads</span>
                     </button>
                   );
                 } else if (btnKey === 'QUICK_MAPS') {
@@ -3961,15 +4119,15 @@ export function App() {
                         setIsStaffAuthenticated(true);
                         setActiveTopView('ADDRESS_SEARCH');
                       }}
-                      className={`px-3 py-1 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs ${
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'ADDRESS_SEARCH'
-                          ? 'bg-sky-500 text-slate-950 ring-2 ring-sky-300'
+                          ? 'bg-sky-500 text-slate-950 ring-1 ring-sky-300'
                           : 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40'
                       }`}
                       title="Drag left/right to rearrange • Open Dedicated Quick Map & Schedule Radar Page"
                     >
-                      <MapIcon className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                      <span>Quick Map &amp; Schedule Radar</span>
+                      <MapIcon className="w-3 h-3 text-sky-400 shrink-0" />
+                      <span>Quick Map</span>
                     </button>
                   );
                 } else if (btnKey === 'DISPATCH_MAP') {
@@ -3980,7 +4138,7 @@ export function App() {
                         setIsStaffAuthenticated(true);
                         setActiveTopView('MAP');
                       }}
-                      className={`px-2.5 py-1 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-all ${
+                      className={`px-2 py-0.5 rounded-md font-bold text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'MAP'
                           ? 'bg-pink-600 text-white'
                           : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
@@ -3988,7 +4146,7 @@ export function App() {
                       title="Drag left/right to rearrange • Open Full Screen Territory Dispatch Map"
                     >
                       <Navigation className="w-3 h-3 text-pink-400 shrink-0" />
-                      <span>Full Dispatch Map</span>
+                      <span>Dispatch Map</span>
                     </button>
                   );
                 } else if (btnKey === 'SCHEDULE_SEARCH') {
@@ -4000,7 +4158,7 @@ export function App() {
                         setMasterHubFocusBlock('SCHEDULE_SEARCH');
                         setActiveTopView('MASTER_HUB');
                       }}
-                      className={`px-2.5 py-1 rounded-xl font-bold text-xs flex items-center gap-1 cursor-pointer transition-all ${
+                      className={`px-2 py-0.5 rounded-md font-bold text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         activeTopView === 'MASTER_HUB' && masterHubFocusBlock === 'SCHEDULE_SEARCH'
                           ? 'bg-purple-500 text-white'
                           : 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40'
@@ -4008,7 +4166,7 @@ export function App() {
                       title="Drag left/right to rearrange • Jump to Schedule & Search Block"
                     >
                       <Calendar className="w-3 h-3 text-purple-400 shrink-0" />
-                      <span>Schedule &amp; Search</span>
+                      <span>Schedule Search</span>
                     </button>
                   );
                 } else if (btnKey === 'SYNC_ALL') {
@@ -4017,10 +4175,10 @@ export function App() {
                       type="button"
                       onClick={() => handleSyncEverything(false)}
                       disabled={isSyncingEverything}
-                      className="px-3 py-1 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                      className="px-2 py-0.5 rounded-md bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-[10px] flex items-center gap-1 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                       title="Drag left/right to rearrange • 1-Click Sync Everything"
                     >
-                      <RefreshCw className={`w-3 h-3 ${isSyncingEverything ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`w-2.5 h-2.5 ${isSyncingEverything ? 'animate-spin' : ''}`} />
                       <span>{isSyncingEverything ? 'Syncing...' : 'Sync All'}</span>
                     </button>
                   );
@@ -4032,15 +4190,55 @@ export function App() {
                         setIsStaffAuthenticated(true);
                         setActiveTopView('MANAGEMENT');
                       }}
-                      className={`px-3 py-1 rounded-xl font-black text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-md ${
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
                         ['MANAGEMENT', 'QUOTES', 'INVOICES', 'LEGAL'].includes(activeTopView)
-                          ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white ring-2 ring-indigo-300'
+                          ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white ring-1 ring-indigo-300'
                           : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/50'
                       }`}
                       title="Drag left/right to rearrange • Open Management Hub (Intakes, Quotes, Invoices, Staff Roster & Settings)"
                     >
-                      <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                      <SlidersHorizontal className="w-3 h-3 text-indigo-300 shrink-0" />
                       <span>Management</span>
+                    </button>
+                  );
+                } else if (btnKey === 'VOICE_DICTATION') {
+                  btnNode = (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsStaffAuthenticated(true);
+                        setActiveTopView('QUICK_QUOTE');
+                      }}
+                      className={`px-2 py-0.5 rounded-md font-black text-[10px] flex items-center gap-1 cursor-pointer transition-all whitespace-nowrap ${
+                        activeTopView === 'QUICK_QUOTE'
+                          ? 'bg-gradient-to-r from-pink-600 via-fuchsia-600 to-purple-600 text-white ring-1 ring-pink-300'
+                          : 'bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 border border-pink-500/40'
+                      }`}
+                      title="Drag left/right to rearrange • Open Voice Dictation & Quick Quote Intake"
+                    >
+                      <Mic className="w-3 h-3 text-pink-400 shrink-0" />
+                      <span>Voice Dictation</span>
+                    </button>
+                  );
+                } else if (btnKey === 'BACKUP_ZIP') {
+                  btnNode = (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          setSyncAllStatusMessage('📦 Preparing numbered Backup ZIP download...');
+                          const res = await saveAndDownloadNumberedProjectBackupZip();
+                          setSyncAllStatusMessage(`✅ Downloaded ${res.fileName} to your device!`);
+                          setTimeout(() => setSyncAllStatusMessage(null), 5000);
+                        } catch {
+                          setIsProjectBackupModalOpen(true);
+                        }
+                      }}
+                      className="px-2 py-0.5 rounded-md bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-[10px] flex items-center gap-1 border border-cyan-300/50 cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+                      title="1-Click Download Numbered Project Backup ZIP directly from app.tidyupscleaning.com (No Google popup needed)"
+                    >
+                      <FileArchive className="w-3 h-3 text-white shrink-0" />
+                      <span>Backup ZIP</span>
                     </button>
                   );
                 } else if (btnKey === 'BLOCK_SPAM') {
@@ -4048,12 +4246,11 @@ export function App() {
                     <button
                       type="button"
                       onClick={() => handleOpenSpamShield()}
-                      className="px-3 py-1 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs shadow-md flex items-center gap-1.5 border border-rose-300/50 cursor-pointer transition-all active:scale-95"
+                      className="px-2 py-0.5 rounded-md bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-[10px] flex items-center gap-1 border border-rose-300/50 cursor-pointer transition-all active:scale-95 whitespace-nowrap"
                       title="Drag left/right to rearrange • Instant Call Blocker: Block nuisance callers, area codes & telemarketers across all Twilio lines"
                     >
-                      <div className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                      <ShieldAlert className="w-3.5 h-3.5 text-white shrink-0" />
-                      <span>Block Spam Caller</span>
+                      <ShieldAlert className="w-3 h-3 text-white shrink-0" />
+                      <span>Block Spam</span>
                     </button>
                   );
                 }
@@ -4067,7 +4264,7 @@ export function App() {
                     onDragStart={() => handleBarDragStart('footer', btnKey)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={() => handleBarDrop('footer', btnKey)}
-                    className={`flex items-center gap-0.5 rounded-xl transition-all ${
+                    className={`flex items-center gap-0.5 rounded-md transition-all shrink-0 ${
                       isRearrangingBars ? 'ring-1 ring-amber-400 bg-slate-800 p-0.5' : ''
                     } ${draggedBarItem?.bar === 'footer' && draggedBarItem?.id === btnKey ? 'opacity-40 scale-95' : ''}`}
                   >
@@ -4079,7 +4276,7 @@ export function App() {
                           e.stopPropagation();
                           moveBarButton('footer', btnKey, 'left');
                         }}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 text-amber-300 hover:bg-slate-700 disabled:opacity-25 text-[10px] font-black cursor-pointer"
+                        className="px-1 py-0.5 rounded bg-slate-950 text-amber-300 hover:bg-slate-700 disabled:opacity-25 text-[9px] font-black cursor-pointer"
                         title="Move Button Left"
                       >
                         ◀
@@ -4094,7 +4291,7 @@ export function App() {
                           e.stopPropagation();
                           moveBarButton('footer', btnKey, 'right');
                         }}
-                        className="px-1.5 py-0.5 rounded bg-slate-950 text-amber-300 hover:bg-slate-700 disabled:opacity-25 text-[10px] font-black cursor-pointer"
+                        className="px-1 py-0.5 rounded bg-slate-950 text-amber-300 hover:bg-slate-700 disabled:opacity-25 text-[9px] font-black cursor-pointer"
                         title="Move Button Right"
                       >
                         ▶
