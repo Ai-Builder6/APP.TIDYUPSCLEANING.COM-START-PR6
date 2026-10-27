@@ -1,0 +1,20 @@
+{
+  "user-owner": {
+    "userId": "user-owner",
+    "cleanerId": "user-owner",
+    "name": "Richard \"Owner Account\"",
+    "role": "OWNER",
+    "email": "cleaningserviceyeg@gmail.com",
+    "phone": "(780) 718-5092",
+    "assignedVan": "Mobile Unit",
+    "lat": 53.3971693926053,
+    "lng": -113.5951292015235,
+    "accuracy": 74,
+    "speedKmh": null,
+    "heading": null,
+    "deviceType": "Device GPS",
+    "batteryLevel": null,
+    "permissionState": "granted",
+    "timestamp": "2026-10-27T18:04:47.510Z"
+  }
+}

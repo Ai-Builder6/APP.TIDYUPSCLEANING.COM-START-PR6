@@ -6,10 +6,10 @@
     "email": "cleaningserviceyeg@gmail.com",
     "phone": "(780) 718-5092",
     "title": "Owner & Executive Director (No Password Required)",
-    "noPasswordRequired": true,
-    "requireLiveLocation": false,
-    "pin": "1001",
-    "password": "",
+    "noPasswordRequired": false,
+    "requireLiveLocation": true,
+    "pin": "196969",
+    "password": "Cleaning2026!@",
     "customPermissions": {
       "hasFullAccess": true
     }
@@ -22,10 +22,10 @@
     "phone": "(780) 718-5092",
     "assignedVan": "Executive HQ",
     "title": "Executive Admin & Owner",
-    "noPasswordRequired": true,
-    "requireLiveLocation": false,
-    "pin": "1002",
-    "password": "",
+    "noPasswordRequired": false,
+    "requireLiveLocation": true,
+    "pin": "195959",
+    "password": "Cleaning2026!@",
     "customPermissions": {
       "hasFullAccess": true
     }
@@ -198,35 +198,5 @@
     "pin": "3014",
     "password": "cleaner3014",
     "requireLiveLocation": true
-  },
-  {
-    "id": "user-custom-1792870613823",
-    "name": "FB APP TESTER",
-    "email": "booking+test@tidyupscleaning.com",
-    "phone": "(780) 718-5092",
-    "role": "CLEANER",
-    "title": "Full-Access Operations & Dispatch",
-    "password": "fbtester",
-    "pin": "1236",
-    "noPasswordRequired": false,
-    "requireLiveLocation": true,
-    "customPermissions": {
-      "hasFullAccess": false,
-      "canAccessMasterHub": false,
-      "canAccessQuickQuote": true,
-      "canAccessDispatchMap": true,
-      "canAccessSchedule": false,
-      "canAccessClients": false,
-      "canAccessLeads": false,
-      "canAccessManagement": false,
-      "canViewAllVans": false,
-      "canAssignTickets": false,
-      "canAccessBillingInvoices": false,
-      "canAccessQuotesPipeline": false,
-      "canAccessJobberConfig": false,
-      "canAccessQuoPhoneConfig": false,
-      "canManageUsersAndAccess": false,
-      "canViewOnlyAssignedJobs": true
-    }
   }
 ]
