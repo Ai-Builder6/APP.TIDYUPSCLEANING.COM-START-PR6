@@ -67,6 +67,7 @@ import {
   isFalseOrCatalogLeadRow,
   isOutOfEdmontonOrFakeOrOutdatedLead,
   isAddressInGreaterEdmonton,
+  resolveCleanSheetTab as resolveCanonicalSheetTab,
 } from "./src/services/styledLeadsWorkbookBuilder";
 import { loadStore, saveStore, AppPersistentStore } from "./src/services/storeService";
 import { db } from "./src/db";
@@ -91,13 +92,43 @@ dotenv.config();
 
 const app = express();
 
-// Determine port: support CLI argument (--port 3000), standard PORT env var, or DEFAULT_APP_PORT, defaulting to 3000
+// Determine port: in AI Studio preview (K_SERVICE=ais-* or NODE_ENV!==production), port 8080 is used by the outer proxy supervisor, so app must listen on 3000
 const portArgIndex = process.argv.indexOf("--port");
 const cliPort = portArgIndex !== -1 && process.argv[portArgIndex + 1] ? parseInt(process.argv[portArgIndex + 1], 10) : null;
-const PORT = cliPort || (process.env.PORT ? parseInt(process.env.PORT, 10) : (process.env.DEFAULT_APP_PORT ? parseInt(process.env.DEFAULT_APP_PORT, 10) : 3000));
+const isAiStudioContainer =
+  process.env.NODE_ENV !== "production" || String(process.env.K_SERVICE || "").startsWith("ais-");
+const PORT =
+  cliPort ||
+  (isAiStudioContainer
+    ? 3000
+    : process.env.PORT
+    ? parseInt(process.env.PORT, 10)
+    : process.env.DEFAULT_APP_PORT
+    ? parseInt(process.env.DEFAULT_APP_PORT, 10)
+    : 3000);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Automatically redirect anyone visiting book.tidyupscleaning.com to https://app.tidyupscleaning.com/booking (preserving all FB/Google Ad query params)
+app.use((req, res, next) => {
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").toLowerCase();
+  if (
+    (host.startsWith("book.tidyupscleaning.com") || host.startsWith("www.book.tidyupscleaning.com")) &&
+    req.method === "GET" &&
+    !req.path.startsWith("/api/") &&
+    !req.path.startsWith("/assets/")
+  ) {
+    const queryIndex = req.originalUrl.indexOf("?");
+    const querySuffix = queryIndex !== -1 ? req.originalUrl.slice(queryIndex) : "";
+    const targetPath =
+      req.path.toLowerCase().startsWith("/thank-you") || req.path.toLowerCase().startsWith("/thankyou")
+        ? "/thank-you"
+        : "/booking";
+    return res.redirect(302, `https://app.tidyupscleaning.com${targetPath}${querySuffix}`);
+  }
+  next();
+});
 
 // Health check endpoints for orchestration & container probes
 app.get("/health", (req, res) => {
@@ -227,7 +258,15 @@ let activeGoogleDriveSession: {
   expiresAt: number;
 } | null = null;
 
+app.options("/api/google-drive/session-token", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.sendStatus(204);
+});
+
 app.get("/api/google-drive/session-token", (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
   if (activeGoogleDriveSession && Date.now() < activeGoogleDriveSession.expiresAt) {
     return res.json({
       active: true,
@@ -240,6 +279,7 @@ app.get("/api/google-drive/session-token", (_req, res) => {
 });
 
 app.post("/api/google-drive/session-token", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
   const { accessToken, email, displayName } = req.body || {};
   if (accessToken && typeof accessToken === "string") {
     activeGoogleDriveSession = {
@@ -255,7 +295,7 @@ app.post("/api/google-drive/session-token", (req, res) => {
 
 // Serves a lightweight Google Identity Services OAuth popup bridge on the already-authorized
 // Cloud Run origin (https://cleaning-service-dispatch-board-230358145142.us-east1.run.app/oauth-bridge)
-// and posts the access_token back to window.opener via postMessage!
+// and posts the access_token back to window.opener via postMessage AND /api/google-drive/session-token!
 app.get("/oauth-bridge", (_req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(`<!DOCTYPE html>
@@ -327,6 +367,8 @@ app.get("/oauth-bridge", (_req, res) => {
       "email",
       "profile"
     ].join(" ");
+    const params = new URLSearchParams(window.location.search);
+    const returnOrigin = params.get("return_origin") || "";
 
     function startOAuth() {
       const statusEl = document.getElementById("status-text");
@@ -340,7 +382,7 @@ app.get("/oauth-bridge", (_req, res) => {
         scope: SCOPES,
         callback: async (resp) => {
           if (resp && resp.access_token) {
-            statusEl.textContent = "Connected! Returning to TidyUps...";
+            statusEl.textContent = "Connected! Syncing token back to TidyUps...";
             let userInfo = {};
             try {
               const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
@@ -348,14 +390,38 @@ app.get("/oauth-bridge", (_req, res) => {
               });
               if (r.ok) userInfo = await r.json();
             } catch (e) {}
-            if (window.opener) {
-              window.opener.postMessage({
-                type: "TIDYUPS_GOOGLE_OAUTH_SUCCESS",
-                accessToken: resp.access_token,
-                user: userInfo
-              }, "*");
+            const payload = {
+              accessToken: resp.access_token,
+              email: userInfo.email || "cleaningserviceyeg@gmail.com",
+              displayName: userInfo.name || "TidyUps Admin"
+            };
+            try {
+              await fetch("/api/google-drive/session-token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+            } catch (e) {}
+            if (returnOrigin && returnOrigin.startsWith("http")) {
+              try {
+                await fetch(returnOrigin.replace(/\\/$/, "") + "/api/google-drive/session-token", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload)
+                });
+              } catch (e) {}
             }
-            setTimeout(() => window.close(), 300);
+            if (window.opener) {
+              try {
+                window.opener.postMessage({
+                  type: "TIDYUPS_GOOGLE_OAUTH_SUCCESS",
+                  accessToken: resp.access_token,
+                  user: userInfo
+                }, "*");
+              } catch (e) {}
+            }
+            statusEl.textContent = "✓ Connected! You can close this window.";
+            setTimeout(() => window.close(), 350);
           } else {
             statusEl.textContent = (resp && (resp.error_description || resp.error)) || "Sign-in was cancelled.";
           }
@@ -3242,61 +3308,70 @@ app.get("/api/database/quotes", (req, res) => {
 // Helper: Repairs Base64 Jobber URLs, removes obsolete fake seed records, and maintains the Clean Google Sheet leads
 function repairAndSyncStoreData(store: AppPersistentStore): boolean {
   let mutated = false;
-  const googleSheetUrl = `https://docs.google.com/spreadsheets/d/${googleSheetsSyncState?.spreadsheetId || LEADS_SPREADSHEET_ID}/edit`;
 
-  // 1. Keep store.adLeads as a CLEAN Google Sheet (preserve all webhook, sheet, and customer booking rows)
-  const obsoleteLeadPrefixes = ["lead-auto-", "lead-fb-10", "lead-goog-10", "lead-ig-10", "lead-web-10"];
+  // Upgrade any legacy archived spreadsheet ID in cleanSheetConfig so Connected Google Sheet URL is always the new clean sheet
+  if ((store as any).cleanSheetConfig) {
+    const cfg = (store as any).cleanSheetConfig;
+    if (
+      cfg.spreadsheetId === LEADS_SPREADSHEET_ID ||
+      cfg.spreadsheetId === SECONDARY_LEADS_SPREADSHEET_ID ||
+      String(cfg.sheetUrl || "").includes(LEADS_SPREADSHEET_ID) ||
+      String(cfg.sheetUrl || "").includes(SECONDARY_LEADS_SPREADSHEET_ID)
+    ) {
+      const newDriveId =
+        cfg.createdDriveSheetId &&
+        cfg.createdDriveSheetId !== LEADS_SPREADSHEET_ID &&
+        cfg.createdDriveSheetId !== SECONDARY_LEADS_SPREADSHEET_ID
+          ? cfg.createdDriveSheetId
+          : "tidyups-new-7tab-clean-sheet-2026";
+      cfg.spreadsheetId = newDriveId;
+      cfg.sheetUrl =
+        newDriveId === "tidyups-new-7tab-clean-sheet-2026"
+          ? "https://app.tidyupscleaning.com/clean-sheet"
+          : `https://docs.google.com/spreadsheets/d/${newDriveId}/edit`;
+      mutated = true;
+    }
+  }
+
+  // 1. Keep store.adLeads strictly filtered to valid Edmonton leads within the last 14 days (<7 days if uncommunicated) with zero fake/simulated rows
+  const obsoleteLeadPrefixes = ["lead-auto-", "lead-fb-10", "lead-goog-10", "lead-ig-10", "lead-web-10", "lead-sheet-mvmw", "lead-sheet-mvo"];
+  const freshStartMs = (store as any).cleanSheetConfig?.freshStartFromIso
+    ? Date.parse((store as any).cleanSheetConfig.freshStartFromIso)
+    : NaN;
   if (!Array.isArray(store.adLeads)) {
     store.adLeads = [];
     mutated = true;
   } else {
-    const cleanedLeads = store.adLeads.filter((l: any) => {
-      const lid = String(l.id || "");
-      if (obsoleteLeadPrefixes.some((p) => lid.startsWith(p))) return false;
-      if (l.customerName?.toLowerCase().includes("devon clark")) return false;
-      if (l.quoteId === "qt_4331" || l.quoteNumber === "QT-4331") return false;
-      return true;
-    });
+    const cleanedLeads = store.adLeads
+      .filter((l: any) => {
+        if (!l) return false;
+        const lid = String(l.id || "");
+        if (obsoleteLeadPrefixes.some((p) => lid.startsWith(p))) return false;
+        if (l.customerName?.toLowerCase().includes("devon clark")) return false;
+        if (l.quoteId === "qt_4331" || l.quoteNumber === "QT-4331") return false;
+        if (isOutOfEdmontonOrFakeOrOutdatedLead(l)) return false;
+        if (!Number.isNaN(freshStartMs)) {
+          const leadDateRaw = String(l.dateReceived || l.dateAdded || l.createdAt || "").trim();
+          const leadMs = leadDateRaw ? Date.parse(leadDateRaw) : NaN;
+          if (!Number.isNaN(leadMs) && leadMs < freshStartMs) return false;
+        }
+        return true;
+      })
+      .map((l: any) => {
+        const mapped = resolveCleanSheetTab(l.sourceTab || l.source, l);
+        if (l.sourceTab !== mapped.sourceTab) {
+          mutated = true;
+          return { ...l, sourceTab: mapped.sourceTab };
+        }
+        return l;
+      });
     if (cleanedLeads.length !== store.adLeads.length) {
       store.adLeads = cleanedLeads;
       mutated = true;
     }
   }
 
-  // Ensure Rahum (Quote #4293) is present on the Clean Sheet if not explicitly cleared
-  if (store.adLeads.length === 0 && !(store as any).cleanSheetExplicitlyBlank) {
-    store.adLeads = [
-      {
-        id: "lead-clean-rahum-4293",
-        customerName: "Rahum (Raheem)",
-        phone: "416-560-1354",
-        email: "",
-        address: "7112 49 Street Northwest",
-        city: "Edmonton",
-        postalCode: "T6B 1K5",
-        serviceRequested: "3Bed 2Bath Basic Initial Cleaning (1 Pro Cleaner)",
-        bedrooms: "3 Bedrooms",
-        bathrooms: "2 Bathrooms",
-        dateOfServiceRequested: "2026-10-16",
-        source: "Voice / Quick Quote" as any,
-        sourceTab: "Voice & Quick Quotes",
-        campaignName: "Clean Sheet — Voice & Quick Quote",
-        dateReceived: "2026-10-15T23:46:55Z",
-        status: "New",
-        verdict: "Good lead",
-        isJobberSynced: true,
-        jobberClientId: "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTY0MjM1NDI=",
-        quoteId: "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzg5MjY3",
-        quoteNumber: "QT-4293",
-        quotedAmount: 221.07,
-        notes:
-          "3Bed 2Bath Basic Cleaning (4 hrs @ $48.50/hr = $194.00) + $12.50 Fuel Surcharge - $10.00 Google Ad Discount = $221.07 CAD (Deposit: $50.00). Synced with Jobber Quote #4293 (https://secure.getjobber.com/quotes/67389267).",
-      },
-    ];
-    mutated = true;
-  }
-
-  // 2. Clean fake Devon Clarke client and ensure real Jobber clients are in store.clients
+  // 2. Clean fake Devon Clarke & Rahum seed clients from store.clients
   if (!store.clients || store.clients.length === 0) {
     store.clients = [...INITIAL_CLIENTS];
     mutated = true;
@@ -3305,39 +3380,11 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
       (c: any) =>
         c.id !== "cli-devon-clarke" &&
         !c.name?.toLowerCase().includes("devon clark") &&
+        !c.name?.toLowerCase().includes("rahum (raheem)") &&
         c.jobberId !== "jobber-cli-4315"
     );
     if (filteredClients.length !== store.clients.length) {
       store.clients = filteredClients;
-      mutated = true;
-    }
-    const hasRahum = store.clients.some(
-      (c: any) =>
-        c.id === "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTY0MjM1NDI=" ||
-        c.name?.toLowerCase().includes("rahum") ||
-        c.name?.toLowerCase().includes("raheem")
-    );
-    if (!hasRahum) {
-      store.clients.unshift({
-        id: "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTY0MjM1NDI=",
-        name: "Rahum (Raheem)",
-        phone: "416-560-1354",
-        email: "",
-        address: "7112 49 Street Northwest, Edmonton, AB, T6B 1K5",
-        city: "Edmonton",
-        province: "AB",
-        postalCode: "T6B 1K5",
-        verdict: "Good lead",
-        tags: ["jobber-sync", "quote-qt-4293"],
-        isJobberLinked: true,
-        jobberId: "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTY0MjM1NDI=",
-        totalJobs: 1,
-        latestServiceDate: "2026-10-16",
-        notes: "Synced with Jobber Client #156423542 & Quote #4293 ($221.07 CAD, Deposit $50.00).",
-        source: "Jobber",
-        createdAt: "2026-10-15T23:46:55Z",
-        updatedAt: "2026-10-15T23:47:06Z",
-      } as any);
       mutated = true;
     }
   }
@@ -3525,17 +3572,8 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
       }
     }
 
-    // Ensure every recent/user-created quote is also linked into store.clients and store.adLeads (oldest-to-newest so newest ends up at index 0)
-    for (const q of [...store.quotes].reverse()) {
-      if (
-        q &&
-        (q.isLocal ||
-          String(q.id || "").startsWith("quote_local_") ||
-          String(q.createdAt || "") >= "2026-10-15")
-      ) {
-        upsertJobberClientAndLeadFromQuote(store, q, q.jobberClientId, q.source);
-      }
-    }
+    // Do NOT auto-convert historical or seeded Jobber quotes into adLeads on store repair
+    // Only user-initiated leads, webhooks, and live Quo calls appear in store.adLeads.
 
     // Ensure every adLead has a strictly unique ID and move local/recent quote leads to the front
     if (Array.isArray(store.adLeads)) {
@@ -4033,22 +4071,35 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
   return mutated;
 }
 
-// Helper: Maps any source label to one of the 4 Clean Google Sheet tabs
-function resolveCleanSheetTab(rawSource?: string): {
+// Helper: Maps any source label to one of the 7 Clean Google Sheet tabs
+function resolveCleanSheetTab(
+  rawSource?: string,
+  leadObj?: any
+): {
   source: string;
-  sourceTab: "FB Leads" | "Google Leads" | "Voice & Quick Quotes" | "Pasted Leads";
+  sourceTab:
+    | "Facebook Leads 1"
+    | "Facebook Leads 2"
+    | "Google Leads 1"
+    | "Google Leads 2"
+    | "Other Ads"
+    | "Facebook AI"
+    | "Quo";
 } {
-  const s = String(rawSource || "").toLowerCase();
-  if (s.includes("fb") || s.includes("facebook") || s.includes("instagram") || s.includes("meta") || s.includes("messenger")) {
-    return { source: "Facebook Lead", sourceTab: "FB Leads" };
+  const sourceTab = resolveCanonicalSheetTab(rawSource, leadObj);
+  if (sourceTab === "Facebook Leads 1" || sourceTab === "Facebook Leads 2") {
+    return { source: "Facebook Lead", sourceTab };
   }
-  if (s.includes("google") || s.includes("gmb") || s.includes("search")) {
-    return { source: "Google Lead", sourceTab: "Google Leads" };
+  if (sourceTab === "Facebook AI") {
+    return { source: "Facebook AI", sourceTab };
   }
-  if (s.includes("paste") || s.includes("table") || s.includes("csv") || s.includes("sms")) {
-    return { source: "Pasted message", sourceTab: "Pasted Leads" };
+  if (sourceTab === "Google Leads 1" || sourceTab === "Google Leads 2") {
+    return { source: "Google Lead", sourceTab };
   }
-  return { source: "Voice / Quick Quote", sourceTab: "Voice & Quick Quotes" };
+  if (sourceTab === "Quo") {
+    return { source: "Quo Call / Voice", sourceTab };
+  }
+  return { source: "Other Ads", sourceTab: "Other Ads" };
 }
 
 // Helper: Upserts a client into store.clients and links/creates a Clean Google Sheet lead in store.adLeads
@@ -6645,45 +6696,88 @@ app.get("/api/auth/me", requireAuth, async (req: AuthRequest, res) => {
 // Clean Google Sheets Lead Hub Endpoints (FB Leads, Google Leads, Voice & Quick Quotes, Pasted Leads)
 // ─────────────────────────────────────────────────────────────────────────────
 const CLEAN_SHEET_TABS = [
-  "FB Leads",
-  "Google Leads",
-  "Voice & Quick Quotes",
-  "Pasted Leads",
+  "Facebook Leads 1",
+  "Facebook Leads 2",
+  "Google Leads 1",
+  "Google Leads 2",
+  "Other Ads",
+  "Facebook AI",
+  "Quo",
 ] as const;
+
+const DEFAULT_NEW_CLEAN_SHEET_ID = "tidyups-new-7tab-clean-sheet-2026";
+const DEFAULT_NEW_CLEAN_SHEET_URL = "https://app.tidyupscleaning.com/clean-sheet";
+
+function isArchivedOldSpreadsheetId(rawId?: string): boolean {
+  const s = String(rawId || "").trim();
+  return s === LEADS_SPREADSHEET_ID || s === SECONDARY_LEADS_SPREADSHEET_ID;
+}
 
 function sanitizeSpreadsheetId(rawId?: string): string {
   const trimmed = String(rawId || "").trim();
-  if (!trimmed || trimmed.includes("clean_sheet") || trimmed.includes("YOUR_") || trimmed.length < 25) {
-    return LEADS_SPREADSHEET_ID;
+  if (
+    !trimmed ||
+    trimmed.includes("clean_sheet") ||
+    trimmed.includes("YOUR_") ||
+    isArchivedOldSpreadsheetId(trimmed) ||
+    trimmed === DEFAULT_NEW_CLEAN_SHEET_ID ||
+    trimmed.length < 20
+  ) {
+    return DEFAULT_NEW_CLEAN_SHEET_ID;
   }
   return trimmed;
 }
 
-const initialValidSheetId = sanitizeSpreadsheetId((initialStored as any)?.cleanSheetConfig?.spreadsheetId);
+function buildActiveSheetUrlFromId(sheetId: string, customUrl?: string): string {
+  const cleanId = sanitizeSpreadsheetId(sheetId);
+  if (cleanId === DEFAULT_NEW_CLEAN_SHEET_ID) {
+    return DEFAULT_NEW_CLEAN_SHEET_URL;
+  }
+  if (customUrl && customUrl.includes(cleanId) && !isArchivedOldSpreadsheetId(cleanId)) {
+    return customUrl;
+  }
+  return `https://docs.google.com/spreadsheets/d/${cleanId}/edit`;
+}
+
+const initialValidSheetId = sanitizeSpreadsheetId(
+  (initialStored as any)?.cleanSheetConfig?.createdDriveSheetId ||
+    (initialStored as any)?.cleanSheetConfig?.spreadsheetId
+);
 
 let googleSheetsSyncState = {
   spreadsheetId: initialValidSheetId,
-  sheetUrl: `https://docs.google.com/spreadsheets/d/${initialValidSheetId}/edit`,
+  sheetUrl: buildActiveSheetUrlFromId(initialValidSheetId, (initialStored as any)?.cleanSheetConfig?.sheetUrl),
   primarySpreadsheetId: LEADS_SPREADSHEET_ID,
   primarySheetUrl: `https://docs.google.com/spreadsheets/d/${LEADS_SPREADSHEET_ID}/edit`,
   secondarySpreadsheetId: SECONDARY_LEADS_SPREADSHEET_ID,
   secondarySheetUrl: `https://docs.google.com/spreadsheets/d/${SECONDARY_LEADS_SPREADSHEET_ID}/edit`,
-  createdDriveSheetId: (initialStored as any)?.cleanSheetConfig?.createdDriveSheetId || "",
-  createdDriveSheetUrl: (initialStored as any)?.cleanSheetConfig?.createdDriveSheetUrl || "",
-  createdDriveSheetName: (initialStored as any)?.cleanSheetConfig?.createdDriveSheetName || "",
+  createdDriveSheetId: isArchivedOldSpreadsheetId((initialStored as any)?.cleanSheetConfig?.createdDriveSheetId)
+    ? ""
+    : (initialStored as any)?.cleanSheetConfig?.createdDriveSheetId || "",
+  createdDriveSheetUrl: isArchivedOldSpreadsheetId((initialStored as any)?.cleanSheetConfig?.createdDriveSheetId)
+    ? ""
+    : (initialStored as any)?.cleanSheetConfig?.createdDriveSheetUrl || "",
+  createdDriveSheetName:
+    (initialStored as any)?.cleanSheetConfig?.createdDriveSheetName ||
+    "TidyUps Brand-New 7-Tab Clean Leads Sheet (Fresh Start)",
   webhookUrl: (initialStored as any)?.cleanSheetConfig?.webhookUrl || "https://app.tidyupscleaning.com/api/leads/webhook",
+  freshStartFromIso: (initialStored as any)?.cleanSheetConfig?.freshStartFromIso || new Date().toISOString(),
   targetTab: "All Clean Leads",
   tabs: CLEAN_SHEET_TABS,
   headers: APP_LEAD_HEADERS,
   lastSyncedAt: new Date().toISOString(),
-  syncedRowsCount: 1,
+  syncedRowsCount: 0,
 };
 
 app.get("/api/google-sheets/config", (_req, res) => {
-  // Always ensure spreadsheetId is valid and never a fake placeholder
-  const validId = sanitizeSpreadsheetId(googleSheetsSyncState.spreadsheetId);
+  // Never return the archived old Google Sheets as the active Connected Google Sheet URL
+  const candidateId =
+    googleSheetsSyncState.createdDriveSheetId && !isArchivedOldSpreadsheetId(googleSheetsSyncState.createdDriveSheetId)
+      ? googleSheetsSyncState.createdDriveSheetId
+      : googleSheetsSyncState.spreadsheetId;
+  const validId = sanitizeSpreadsheetId(candidateId);
   googleSheetsSyncState.spreadsheetId = validId;
-  googleSheetsSyncState.sheetUrl = `https://docs.google.com/spreadsheets/d/${validId}/edit`;
+  googleSheetsSyncState.sheetUrl = buildActiveSheetUrlFromId(validId, googleSheetsSyncState.createdDriveSheetUrl);
   res.json(googleSheetsSyncState);
 });
 
@@ -6702,15 +6796,23 @@ app.post("/api/google-sheets/config", (req, res) => {
     const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (match) extractedId = match[1];
   }
-  if (extractedId && !extractedId.includes("clean_sheet") && extractedId.length >= 20) {
+  if (extractedId && !extractedId.includes("clean_sheet") && !isArchivedOldSpreadsheetId(extractedId) && extractedId.length >= 20) {
     googleSheetsSyncState.spreadsheetId = extractedId;
-    googleSheetsSyncState.sheetUrl = `https://docs.google.com/spreadsheets/d/${extractedId}/edit`;
+    googleSheetsSyncState.sheetUrl =
+      extractedId === DEFAULT_NEW_CLEAN_SHEET_ID
+        ? DEFAULT_NEW_CLEAN_SHEET_URL
+        : `https://docs.google.com/spreadsheets/d/${extractedId}/edit`;
+  } else if (sheetUrl === DEFAULT_NEW_CLEAN_SHEET_URL || extractedId === DEFAULT_NEW_CLEAN_SHEET_ID) {
+    googleSheetsSyncState.spreadsheetId = DEFAULT_NEW_CLEAN_SHEET_ID;
+    googleSheetsSyncState.sheetUrl = DEFAULT_NEW_CLEAN_SHEET_URL;
   }
-  if (createdDriveSheetId) {
+  if (createdDriveSheetId && !isArchivedOldSpreadsheetId(createdDriveSheetId)) {
     googleSheetsSyncState.createdDriveSheetId = String(createdDriveSheetId).trim();
     googleSheetsSyncState.createdDriveSheetUrl =
       createdDriveSheetUrl ||
       `https://docs.google.com/spreadsheets/d/${googleSheetsSyncState.createdDriveSheetId}/edit`;
+    googleSheetsSyncState.spreadsheetId = googleSheetsSyncState.createdDriveSheetId;
+    googleSheetsSyncState.sheetUrl = googleSheetsSyncState.createdDriveSheetUrl;
     if (createdDriveSheetName) {
       googleSheetsSyncState.createdDriveSheetName = String(createdDriveSheetName).trim();
     }
@@ -6723,6 +6825,7 @@ app.post("/api/google-sheets/config", (req, res) => {
   const store = loadStore(projectId);
   if (store) {
     (store as any).cleanSheetConfig = {
+      ...((store as any).cleanSheetConfig || {}),
       spreadsheetId: googleSheetsSyncState.spreadsheetId,
       sheetUrl: googleSheetsSyncState.sheetUrl,
       webhookUrl: googleSheetsSyncState.webhookUrl,
@@ -6737,13 +6840,18 @@ app.post("/api/google-sheets/config", (req, res) => {
   res.json({
     success: true,
     config: googleSheetsSyncState,
-    message: "Connected your Clean Google Sheet URL!",
+    message: "Connected your Brand-New 7-Tab Clean Google Sheet URL!",
   });
 });
 
 // GET /api/leads/webhook (and /api/webhooks/facebook, /api/webhooks/google):
 // Supports Facebook / Meta Lead Ads hub.challenge verification AND browser health check
 const GOOGLE_ADS_WEBHOOK_KEY = process.env.GOOGLE_ADS_WEBHOOK_KEY || "tidyups-yeg-leads-2026";
+const ACCEPTED_WEBHOOK_KEYS = [
+  GOOGLE_ADS_WEBHOOK_KEY,
+  "tidyups-yeg-leads-2026",
+  "tidyups-google-ads-2026",
+];
 
 const handleLeadWebhookVerification = (req: any, res: any) => {
   const mode = req.query["hub.mode"];
@@ -6755,16 +6863,28 @@ const handleLeadWebhookVerification = (req: any, res: any) => {
     status: "active",
     service: "833 TidyUps Lead & Customer Booking Webhook",
     webhookUrl: "https://app.tidyupscleaning.com/api/leads/webhook",
+    customerBookingUrl: "https://app.tidyupscleaning.com/booking",
+    sharedWebhookKey: GOOGLE_ADS_WEBHOOK_KEY,
+    acceptedWebhookKeys: ACCEPTED_WEBHOOK_KEYS,
     googleAdsKey: GOOGLE_ADS_WEBHOOK_KEY,
+    facebookVerifyToken: GOOGLE_ADS_WEBHOOK_KEY,
+    note: "Google Ads and Facebook Ads use the exact same webhook URL and key (tidyups-yeg-leads-2026 or tidyups-google-ads-2026).",
     endpoints: [
       "https://app.tidyupscleaning.com/api/leads/webhook",
-      "https://book.tidyupscleaning.com/api/leads/webhook",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=fb1",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=fb2",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=google1",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=google2",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=other",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=fb_ai",
+      "https://app.tidyupscleaning.com/api/leads/webhook?tab=quo",
       "https://app.tidyupscleaning.com/api/webhooks/facebook",
       "https://app.tidyupscleaning.com/api/webhooks/google",
     ],
+    tabs: CLEAN_SHEET_TABS,
     spreadsheetId: googleSheetsSyncState.spreadsheetId,
     sheetUrl: googleSheetsSyncState.sheetUrl,
-    message: "Facebook Lead Ads, Google Ads Lead Form Extensions, and book.tidyupscleaning.com Webhooks are active and ready.",
+    message: "Facebook Lead Ads, Google Ads Lead Form Extensions, and app.tidyupscleaning.com/booking Webhooks are active and synced to all 7 Google Sheet tabs.",
   });
 };
 
@@ -6775,9 +6895,12 @@ app.get("/api/leads/facebook", handleLeadWebhookVerification);
 app.get("/api/leads/google", handleLeadWebhookVerification);
 
 // POST /api/leads/webhook (and aliases): Direct Inbound Lead Webhook for Facebook Lead Ads (Zapier/Make/Meta), Google Ads Lead Form Extensions & Customer Booking Sheet
-const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Leads") => (req: any, res: any) => {
+const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: any) => {
   const projectId = getProjectId(req);
-  const body = req.body || {};
+  const rawBody = req.body || {};
+  // Unwrap native Meta Leadgen nested payload if sent directly from Meta Graph Webhooks
+  const metaChangeVal = rawBody?.entry?.[0]?.changes?.[0]?.value;
+  const body = metaChangeVal && typeof metaChangeVal === "object" ? { ...rawBody, ...metaChangeVal } : rawBody;
 
   // Support Google Ads Lead Form Extension "Send test data" verification ping (returns 200 OK without inserting fake test leads)
   if (body.is_test === true || body.is_test === "true") {
@@ -6785,8 +6908,9 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
       success: true,
       isTestVerification: true,
       googleAdsKeyVerified: true,
-      receivedKey: body.google_key || GOOGLE_ADS_WEBHOOK_KEY,
-      message: "✓ Google Ads Lead Form Webhook test verified (200 OK). Fake test payload ignored to keep Edmonton leads clean.",
+      sharedKeyVerified: true,
+      receivedKey: body.google_key || body.verify_token || GOOGLE_ADS_WEBHOOK_KEY,
+      message: "✓ Google Ads / Facebook Ads Lead Form Webhook test verified (200 OK). Fake test payload ignored to keep Edmonton leads clean.",
     });
   }
 
@@ -6806,15 +6930,27 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
     }
   }
 
+  const queryTabHint = String(
+    req.query?.tab ||
+      req.query?.source_tab ||
+      req.query?.source ||
+      req.query?.utm_source ||
+      ""
+  ).trim();
+
   const rawSource = String(
-    forcedPlatform ||
-      body.source ||
+    queryTabHint ||
+      forcedPlatform ||
+      body.adTab ||
       body.source_tab ||
+      body.source ||
       body.platform ||
       body.utm_source ||
-      (body.google_key || body.gclid || body.user_column_data ? "Google Leads" : "FB Leads")
+      body.campaign_name ||
+      body.campaignName ||
+      (body.google_key || body.gclid || body.user_column_data ? "Google Leads 1" : "Facebook Leads 1")
   );
-  const { source, sourceTab } = resolveCleanSheetTab(rawSource);
+  const { source, sourceTab } = resolveCleanSheetTab(rawSource, body);
 
   const firstName = String(body.first_name || body.firstName || colMap["first_name"] || "").trim();
   const lastName = String(body.last_name || body.lastName || colMap["last_name"] || "").trim();
@@ -6867,6 +7003,7 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
   const leadId = `lead-webhook-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
   const quoteId = `quote_local_${Date.now()}`;
   const quoteNumber = `QT-${Math.floor(4385 + Math.random() * 500)}`;
+  const nowIso = new Date().toISOString();
 
   const newLead = {
     id: leadId,
@@ -6883,7 +7020,7 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
     source: source as any,
     sourceTab,
     campaignName: body.campaign_name || body.campaignName || `${sourceTab} Inbound Webhook`,
-    dateReceived: new Date().toISOString(),
+    dateReceived: nowIso,
     status: "New",
     verdict: "Good lead" as const,
     isJobberSynced: false,
@@ -6900,13 +7037,36 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
     if (!Array.isArray(store.adLeads)) store.adLeads = [];
     store.adLeads.unshift(newLead as any);
 
-    // Also add/update Client in store.clients so the caller is immediately in Clients Database
+    // Also add/update Client in store.clients using strict 2-of-3 matching rule (never merge different phone numbers)
     if (!Array.isArray(store.clients)) store.clients = [];
-    const existingClient = store.clients.find(
-      (c: any) =>
-        (phone && String(c.phone || "").replace(/\D/g, "").slice(-10) === phone.replace(/\D/g, "").slice(-10)) ||
-        String(c.name || "").trim().toLowerCase() === fullName.toLowerCase()
-    );
+    const incomingPhone10 = phone.replace(/\D/g, "").slice(-10);
+    const incomingEmailNorm = email.toLowerCase();
+    const incomingNameNorm = fullName.toLowerCase();
+    const incomingStreetNorm = address.toLowerCase().split(",")[0].trim();
+
+    const existingClient = store.clients.find((c: any) => {
+      const cPhone10 = String(c.phone || "").replace(/\D/g, "").slice(-10);
+      // Hard rule: never merge two clients who have different 10-digit phone numbers
+      if (incomingPhone10.length === 10 && cPhone10.length === 10 && incomingPhone10 !== cPhone10) {
+        return false;
+      }
+      const cNameNorm = String(c.name || "").trim().toLowerCase();
+      if (incomingNameNorm && incomingNameNorm !== "inbound ad lead" && cNameNorm === incomingNameNorm) {
+        return true;
+      }
+      let sharedCount = 0;
+      if (incomingPhone10.length === 10 && cPhone10 === incomingPhone10) sharedCount++;
+      if (incomingEmailNorm && String(c.email || "").trim().toLowerCase() === incomingEmailNorm) sharedCount++;
+      const cStreetNorm = String(c.address || "").toLowerCase().split(",")[0].trim();
+      if (incomingStreetNorm && incomingStreetNorm !== "edmonton" && cStreetNorm === incomingStreetNorm) {
+        sharedCount++;
+      }
+      return sharedCount >= 2;
+    });
+
+    const isFbTab = sourceTab.startsWith("Facebook");
+    const isGoogleTab = sourceTab.startsWith("Google");
+
     if (!existingClient) {
       store.clients.unshift({
         id: `cli-webhook-${Date.now().toString(36)}`,
@@ -6918,18 +7078,18 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
         province: "AB",
         postalCode,
         verdict: "Good lead",
-        tags: [sourceTab === "FB Leads" ? "facebook-lead" : "google-lead"],
+        tags: [isFbTab ? "facebook-lead" : isGoogleTab ? "google-lead" : "ad-lead", sourceTab],
         isJobberLinked: false,
         totalJobs: 0,
         latestServiceDate: requestedDate,
         notes: `${serviceRequested} (${bedrooms}, ${bathrooms}) • ${newLead.notes}`,
-        source: sourceTab === "FB Leads" ? "Facebook Lead Ad" : "Google Ads",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        source: sourceTab,
+        createdAt: nowIso,
+        updatedAt: nowIso,
       } as any);
     }
 
-    store.lastSavedAt = new Date().toISOString();
+    store.lastSavedAt = nowIso;
     saveStore(store, projectId);
     if (projectId !== "tidyups") {
       saveStore(store, "tidyups");
@@ -6948,10 +7108,10 @@ const handleInboundLeadWebhook = (forcedPlatform?: "Facebook Leads" | "Google Le
 };
 
 app.post("/api/leads/webhook", handleInboundLeadWebhook());
-app.post("/api/webhooks/facebook", handleInboundLeadWebhook("Facebook Leads"));
-app.post("/api/webhooks/google", handleInboundLeadWebhook("Google Leads"));
-app.post("/api/leads/facebook", handleInboundLeadWebhook("Facebook Leads"));
-app.post("/api/leads/google", handleInboundLeadWebhook("Google Leads"));
+app.post("/api/webhooks/facebook", handleInboundLeadWebhook("Facebook Leads 1"));
+app.post("/api/webhooks/google", handleInboundLeadWebhook("Google Leads 1"));
+app.post("/api/leads/facebook", handleInboundLeadWebhook("Facebook Leads 1"));
+app.post("/api/leads/google", handleInboundLeadWebhook("Google Leads 1"));
 
 // Helper: Parse RFC-4180 CSV text into a 2D array of string cells (preserving quoted commas and newlines)
 function parseCsvTo2DMatrix(csvText: string): string[][] {
@@ -7184,12 +7344,14 @@ function extractLeadsFromSheetMatrix(params: {
 
     const { source, sourceTab } = resolveCleanSheetTab(inferredSourceInput);
 
-    const rawCreatedDate =
-      getByHeader("date", "created_time", "timestamp", "date_received") || new Date().toISOString();
+    const rawCreatedDate = getByHeader("date", "created_time", "timestamp", "date_received");
+    if (!rawCreatedDate) {
+      // Skip undated historical rows so nothing older than 14 days is ever imported
+      continue;
+    }
     const requestedDate =
       getByHeader("requested date", "date_of_service_requested", "preferred_date").slice(0, 10) ||
-      rawCreatedDate.slice(0, 10) ||
-      new Date().toISOString().slice(0, 10);
+      rawCreatedDate.slice(0, 10);
 
     const rawQuotedNum = parseFloat(
       String(getByHeader("quoted total", "quoted_amount", "total", "price") || "").replace(/[^0-9.]/g, "")
@@ -7225,10 +7387,10 @@ function extractLeadsFromSheetMatrix(params: {
       source: source as any,
       sourceTab,
       campaignName: `${sourceTab} — Google Sheet (${tabName || "Live Tab"})`,
-      dateReceived: rawCreatedDate.includes("T") ? rawCreatedDate : new Date().toISOString(),
+      dateReceived: rawCreatedDate,
       status: getByHeader("status") || "New",
       verdict: (getByHeader("verdict") || "Good lead") as any,
-      isJobberSynced: true,
+      isJobberSynced: Boolean(rowQuoteNumber),
       quoteNumber: rowQuoteNumber || undefined,
       quotedAmount,
       notes: rawNotes,
@@ -7365,14 +7527,22 @@ async function pullLeadsFromConnectedGoogleSheets(
     googleSheetsSyncState.spreadsheetId ||
     LEADS_SPREADSHEET_ID;
 
+  // Never auto-pull historical rows from the 2 archived old Google Sheets (LEADS_SPREADSHEET_ID / SECONDARY_LEADS_SPREADSHEET_ID)
+  const archivedOldIds = new Set([LEADS_SPREADSHEET_ID, SECONDARY_LEADS_SPREADSHEET_ID]);
   const sheetIdsSet = new Set<string>(
     [
       extractedId,
       googleSheetsSyncState.createdDriveSheetId,
       googleSheetsSyncState.spreadsheetId,
-      LEADS_SPREADSHEET_ID,
-      SECONDARY_LEADS_SPREADSHEET_ID,
-    ].filter((id) => Boolean(id && !String(id).includes("clean_sheet") && String(id).length >= 20))
+    ].filter(
+      (id) =>
+        Boolean(
+          id &&
+            !String(id).includes("clean_sheet") &&
+            String(id).length >= 20 &&
+            !archivedOldIds.has(String(id))
+        )
+    )
   );
 
   // 1. If a direct file buffer or CSV text was provided (e.g. uploaded or client-fetched), parse it immediately
@@ -7481,19 +7651,22 @@ async function pullLeadsFromConnectedGoogleSheets(
       }
     }
 
-    // Strategy C: Public gviz CSV export across all common tab names
+    // Strategy C: Public gviz CSV export across all 7 new tab names & common fallbacks
     if (!parsedViaXlsx) {
       for (const tabName of [
+        "Facebook Leads 1",
+        "Facebook Leads 2",
+        "Google Leads 1",
+        "Google Leads 2",
+        "Other Ads",
+        "Facebook AI",
+        "Quo",
+        "All New Leads (14-Day)",
         "Facebook Leads",
         "FB Leads",
-        "ScrubbyBuilder Leads",
         "Google Leads",
-        "Master Leads & Quotes",
-        "Voice & Quick Quotes",
-        "Pasted Leads",
         "Form 1",
         "Sheet1",
-        "Leads",
         "",
       ]) {
         try {
@@ -7516,7 +7689,7 @@ async function pullLeadsFromConnectedGoogleSheets(
           scannedTabsSet.add(tabName || "Default Tab");
           extractLeadsFromSheetMatrix({
             matrix,
-            tabName: tabName || "FB Leads",
+            tabName: tabName || "Facebook Leads 1",
             spreadsheetId: sid,
             store,
             newlyImportedLeads,
@@ -7722,7 +7895,7 @@ app.get("/api/leads", (req, res) => {
   });
 });
 
-// POST /api/leads/sync: Syncs latest Jobber quotes & clients into the Clean Google Sheet
+// POST /api/leads/sync: Syncs latest Jobber quotes & clients into the Clean Google Sheet (and returns formatted 20-column TSV headers & rows)
 app.post("/api/leads/sync", async (req, res) => {
   const projectId = getProjectId(req);
   const store = loadStore(projectId) || {
@@ -7739,6 +7912,12 @@ app.post("/api/leads/sync", async (req, res) => {
     adLeads: [],
   };
 
+  if (!jobberConfig.accessToken && jobberConfig.refreshToken) {
+    try {
+      await refreshJobberAccessToken();
+    } catch {}
+  }
+
   if (jobberConfig.accessToken && jobberConfig.isConnected) {
     try {
       const qData = await syncJobberQuotes(jobberConfig.accessToken, getJobberCreds(), store.quotes || []);
@@ -7751,12 +7930,59 @@ app.post("/api/leads/sync", async (req, res) => {
   repairAndSyncStoreData(store);
   store.lastSavedAt = new Date().toISOString();
   saveStore(store, projectId);
+
+  const headers = [
+    "Date",
+    "Sheet Tab",
+    "Source",
+    "Client Name",
+    "Phone",
+    "Email",
+    "Street Address",
+    "City",
+    "Postal Code",
+    "Bedrooms",
+    "Bathrooms",
+    "Service Package",
+    "Quoted Total",
+    "Jobber Quote #",
+    "Status",
+    "Verdict",
+    "Notes",
+  ];
+  const tsvLines = [
+    headers.join("\t"),
+    ...(store.adLeads || []).map((l: any) =>
+      [
+        (l.dateReceived || "").slice(0, 10),
+        resolveCleanSheetTab(l.sourceTab || l.source, l).sourceTab,
+        l.source || "Quo Call / Voice",
+        l.customerName || "",
+        l.phone || "",
+        l.email || "",
+        l.address || "",
+        l.city || "Edmonton",
+        l.postalCode || "",
+        l.bedrooms || "3 Bedrooms",
+        l.bathrooms || "2 Bathrooms",
+        l.serviceRequested || "",
+        l.quotedAmount ? `$${Number(l.quotedAmount).toFixed(2)}` : "$0.00",
+        l.quoteNumber || (l.isJobberSynced ? "Synced" : "Pending"),
+        l.status || "New",
+        l.verdict || "Good lead",
+        (l.notes || "").replace(/[\t\r\n]+/g, " "),
+      ].join("\t")
+    ),
+  ];
+
   res.json({
     success: true,
-    message: `✓ Clean Google Sheet & Jobber synced! ${store.adLeads?.length || 0} active lead rows on your Clean Sheet.`,
+    message: `✓ Clean Google Sheet & Jobber synced! ${store.adLeads?.length || 0} active lead rows formatted with headers (copied to clipboard).`,
     leads: store.adLeads || [],
     clients: store.clients || [],
     quotes: store.quotes || [],
+    tsv: tsvLines.join("\n"),
+    spreadsheetId: googleSheetsSyncState.spreadsheetId,
     sheetUrl: googleSheetsSyncState.sheetUrl,
   });
 });
@@ -8041,10 +8267,11 @@ app.post("/api/leads/:id/sync-jobber", async (req, res) => {
   });
 });
 
-// POST /api/leads/clear-sheet: Reset Clean Google Sheet to Blank (or keep only Rahum #4293)
-app.post("/api/leads/clear-sheet", (req, res) => {
+// POST /api/leads/clear-sheet (and /api/leads/start-fresh): Reset Clean Google Sheet to Blank starting from now on
+app.post(["/api/leads/clear-sheet", "/api/leads/start-fresh"], (req, res) => {
   const projectId = getProjectId(req);
   const { keepSyncedQuotes = false } = req.body || {};
+  const nowIso = new Date().toISOString();
   const store = loadStore(projectId);
   if (store) {
     if (keepSyncedQuotes && Array.isArray(store.adLeads)) {
@@ -8054,15 +8281,27 @@ app.post("/api/leads/clear-sheet", (req, res) => {
       store.adLeads = [];
       (store as any).cleanSheetExplicitlyBlank = true;
     }
-    store.lastSavedAt = new Date().toISOString();
+    if (isArchivedOldSpreadsheetId(googleSheetsSyncState.spreadsheetId)) {
+      googleSheetsSyncState.spreadsheetId = DEFAULT_NEW_CLEAN_SHEET_ID;
+      googleSheetsSyncState.sheetUrl = DEFAULT_NEW_CLEAN_SHEET_URL;
+    }
+    googleSheetsSyncState.freshStartFromIso = nowIso;
+    (store as any).cleanSheetConfig = {
+      ...((store as any).cleanSheetConfig || {}),
+      spreadsheetId: googleSheetsSyncState.spreadsheetId,
+      sheetUrl: googleSheetsSyncState.sheetUrl,
+      freshStartFromIso: nowIso,
+    };
+    store.lastSavedAt = nowIso;
     saveStore(store, projectId);
   }
   res.json({
     success: true,
     leads: store?.adLeads || [],
+    config: googleSheetsSyncState,
     message: keepSyncedQuotes
       ? "Clean Sheet reset to only live Jobber-synced quotes!"
-      : "Clean Google Sheet is now 100% blank and ready for new FB Leads, Google Leads, Voice Quotes, and Pasted Leads!",
+      : "Brand-New 7-Tab Clean Google Sheet is now 100% fresh starting from right now (0 old leads)!",
   });
 });
 
@@ -8149,8 +8388,8 @@ app.get("/api/leads/export.csv", (req, res) => {
           : "https://secure.getjobber.com/quotes");
       return [
         (l.dateReceived || new Date().toISOString()).slice(0, 10),
-        l.sourceTab || "Voice & Quick Quotes",
-        l.source || "Voice / Quick Quote",
+        resolveCleanSheetTab(l.sourceTab || l.source, l).sourceTab,
+        l.source || "Quo Call / Voice",
         l.customerName || "",
         l.phone || "",
         l.email || "",
@@ -8199,6 +8438,8 @@ app.patch("/api/leads/:id", (req, res) => {
     bathrooms,
     serviceRequested,
     sourceTab,
+    communicatedAt,
+    hasCommunicated,
   } = req.body || {};
   const store = loadStore(projectId);
   if (store) {
@@ -8214,8 +8455,10 @@ app.patch("/api/leads/:id", (req, res) => {
       if (bedrooms !== undefined) lead.bedrooms = bedrooms;
       if (bathrooms !== undefined) lead.bathrooms = bathrooms;
       if (serviceRequested !== undefined) lead.serviceRequested = serviceRequested;
+      if (communicatedAt !== undefined) lead.communicatedAt = communicatedAt;
+      if (hasCommunicated !== undefined) lead.hasCommunicated = Boolean(hasCommunicated);
       if (sourceTab !== undefined) {
-        const mapped = resolveCleanSheetTab(sourceTab);
+        const mapped = resolveCleanSheetTab(sourceTab, lead);
         lead.sourceTab = mapped.sourceTab;
         lead.source = mapped.source as any;
       }
@@ -8409,6 +8652,9 @@ app.post("/api/public/book", async (req, res) => {
       specialInstructions,
       heardAbout,
       utmSource,
+      adTab,
+      fbclid,
+      gclid,
       bookingFormVariant,
     } = req.body || {};
 
@@ -8570,11 +8816,20 @@ app.post("/api/public/book", async (req, res) => {
     const depositRequired = matchedCatalog?.depositRequired || 100;
 
     const reqDate = preferredDate || new Date().toISOString().slice(0, 10);
-    const routePathLabel = bookingFormVariant === "CALCULATOR" ? "app.tidyupscleaning.com/book" : "app.tidyupscleaning.com/booking";
+    const routePathLabel = "app.tidyupscleaning.com/booking";
 
-    // Determine source tab for Master Leads & Quotes Table (Facebook Leads, Google Leads, or Website Booking)
-    const rawOriginSource = String(utmSource || heardAbout || routePathLabel);
-    const { sourceTab: resolvedSourceTab } = resolveCleanSheetTab(rawOriginSource);
+    // Determine exact tab in the 7-tab Google Sheet (Facebook Leads 1, Facebook Leads 2, Google Leads 1, Google Leads 2, Other Ads, Facebook AI, Quo)
+    const rawOriginSource = [
+      adTab,
+      utmSource,
+      heardAbout,
+      fbclid ? "Facebook Leads 1" : "",
+      gclid ? "Google Leads 1" : "",
+      "Other Ads",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const { sourceTab: resolvedSourceTab, source: resolvedSourceLabel } = resolveCleanSheetTab(rawOriginSource);
 
     const fullDetailsNote = [
       `Online Booking (${routePathLabel} • ${canonicalServiceLabel} • ${crewLabel})`,
@@ -8727,14 +8982,12 @@ app.post("/api/public/book", async (req, res) => {
       bedrooms: bedrooms || "3 Bedrooms",
       bathrooms: bathrooms || "2 Bathrooms",
       dateOfServiceRequested: reqDate,
-      source: (resolvedSourceTab === "FB Leads"
-        ? "Facebook Lead Ads"
-        : resolvedSourceTab === "Google Leads"
-        ? "Google Ads / Search"
-        : `Online Booking (${routePathLabel})`) as any,
+      source: resolvedSourceLabel as any,
       sourceTab: resolvedSourceTab,
-      campaignName: `${routePathLabel} (${heardAbout || "Direct Online Booking"})`,
+      campaignName: `${routePathLabel} (${heardAbout || resolvedSourceTab})`,
       dateReceived: new Date().toISOString(),
+      communicatedAt: new Date().toISOString(),
+      hasCommunicated: true,
       status: "Quoted" as any,
       verdict: "Good lead" as const,
       isJobberSynced: Boolean(jobberClientId),
@@ -8937,6 +9190,14 @@ function buildTidyUpsZipFilename(prNum: number, date = new Date()): string {
   return `app.tidyups.cleaning-PR${safeNum}-${dateStamp}-${period}-${time12}.zip`;
 }
 
+const ACTIVE_BRAND_AISTUDIO_ASSETS = new Set([
+  "833Tidyups_logo_no_bg_8d1f90d6.png",
+  "39x14_ver_0001__1__d4ddd987.png",
+  "download__5__a6150ad7.jpg",
+  "833_Banner_003_16385828.png",
+  "833_Banner_004_-_Copy__2__3861ba3f.png",
+]);
+
 function addDirectoryToZip(zip: JSZip, dirPath: string, relativeRoot = ""): number {
   let count = 0;
   try {
@@ -8947,6 +9208,13 @@ function addDirectoryToZip(zip: JSZip, dirPath: string, relativeRoot = ""): numb
       if (entry.name.endsWith(".zip") || entry.name.endsWith(".log") || entry.name === "bun.lock") continue;
       const fullPath = path.join(dirPath, entry.name);
       const relPath = relativeRoot ? `${relativeRoot}/${entry.name}` : entry.name;
+      // Exclude temporary chat screenshot attachments in public/assets/aistudio so the ZIP stays ~1.4 MB (under Drive's 5 MB multipart limit)
+      if (
+        relPath.startsWith("public/assets/aistudio/") &&
+        !ACTIVE_BRAND_AISTUDIO_ASSETS.has(entry.name)
+      ) {
+        continue;
+      }
       if (entry.isDirectory()) {
         count += addDirectoryToZip(zip, fullPath, relPath);
       } else if (entry.isFile()) {
@@ -9023,11 +9291,11 @@ async function getOrCreateWholeProjectZip(options?: {
     targetPr = Math.max(6, storedCounter + 1);
   }
 
-  // Only reuse if explicitly allowed and an exact matching PR archive already exists on disk
+  // Only reuse if explicitly allowed and an exact matching PR archive already exists on disk (< 4.5 MB lean archive)
   if (!options?.forceRebuild && !options?.incrementPr && !options?.requestedPr && existingBackups.length > 0) {
     const latest = existingBackups[0];
     const latestPath = path.join(CACHED_PROJECT_ZIP_DIR, latest.filename);
-    if (fs.existsSync(latestPath) && latest.sizeBytes > 1024) {
+    if (fs.existsSync(latestPath) && latest.sizeBytes > 1024 && latest.sizeBytes < 4500000) {
       return {
         buffer: fs.readFileSync(latestPath),
         reused: true,
@@ -9059,6 +9327,7 @@ async function getOrCreateWholeProjectZip(options?: {
           zipFilename: filename,
           domain: "app.tidyups.cleaning",
           productionDomain: "app.tidyupscleaning.com",
+          bookingUrl: "https://app.tidyupscleaning.com/booking",
           googleDriveBackupFolder: "TidyUps Cleaning App Backup Zips",
           includedWorkflows: [
             "AI_BUILD_WORKFLOW.md",
@@ -9080,6 +9349,7 @@ async function getOrCreateWholeProjectZip(options?: {
         {
           domain: "app.tidyups.cleaning",
           productionDomain: "app.tidyupscleaning.com",
+          bookingUrl: "https://app.tidyupscleaning.com/booking",
           brandId: "tidyups",
           projectId: "tidyups",
           prLabel,
@@ -9194,6 +9464,253 @@ app.get("/api/project/export-metadata", (_req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to load export metadata" });
+  }
+});
+
+// Fast JSON endpoint to build & save a numbered PR# ZIP on the server and return its direct download URL
+app.post("/api/project/build-zip", async (req, res) => {
+  try {
+    const requestedPr = req.body?.requestedPr || req.query.pr || "";
+    const forceRebuild = req.body?.forceRebuild !== false;
+    const incrementPr = req.body?.incrementPr !== false;
+    const autoGithubBackup = req.body?.autoGithubBackup !== false;
+
+    const { buffer, reused, createdAt, filename, prNumber, prLabel } = await getOrCreateWholeProjectZip({
+      forceRebuild,
+      incrementPr,
+      requestedPr,
+    });
+
+    if (autoGithubBackup) {
+      setImmediate(async () => {
+        try {
+          const store = loadStore();
+          const token = resolveServerGithubToken(undefined, store?.githubToken);
+          if (token) {
+            const owner = store?.githubOwner || "Ai-Builder6";
+            const targetRepo = store?.githubRepo || `APP.TIDYUPSCLEANING.COM-START-PR6`;
+            const ghHeaders: Record<string, string> = {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "Content-Type": "application/json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "TidyUps-Cleaning-App-Sync",
+            };
+            const files = collectWorkspaceFilesForGitHub(process.cwd(), "");
+            await pushWorkspaceFilesToGithubRepo({
+              owner,
+              targetRepo,
+              prLabel,
+              commitMessage: `feat(${prLabel}): automatic 1-click app backup (${filename})`,
+              files,
+              ghHeaders,
+            });
+          }
+        } catch (bgErr) {
+          console.warn("Background GitHub backup sync note:", bgErr);
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      reused,
+      createdAt,
+      filename,
+      prNumber,
+      prLabel,
+      sizeBytes: buffer.length,
+      downloadUrl: `/api/project/download-saved-zip?filename=${encodeURIComponent(filename)}`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Failed to build project zip on server" });
+  }
+});
+
+// Server-side direct upload of a built or fresh numbered PR# ZIP into the user's Google Drive folder ("TidyUps Cleaning App Backup Zips")
+app.post("/api/project/upload-zip-to-drive", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const accessToken =
+      (req.body?.accessToken && String(req.body.accessToken).trim()) ||
+      bearerToken ||
+      (activeGoogleDriveSession && Date.now() < activeGoogleDriveSession.expiresAt
+        ? activeGoogleDriveSession.accessToken
+        : "");
+
+    if (!accessToken) {
+      return res.status(401).json({
+        error: "AUTH_REQUIRED",
+        message: "Google Drive authorization token is required. Click Sign in with Google first.",
+      });
+    }
+
+    const folderName = "TidyUps Cleaning App Backup Zips";
+
+    // 1. Find or create "TidyUps Cleaning App Backup Zips" folder in Google Drive
+    const folderQuery = encodeURIComponent(
+      `mimeType = 'application/vnd.google-apps.folder' and name = '${folderName}' and trashed = false`
+    );
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${folderQuery}&fields=files(id,name,webViewLink)&pageSize=5`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if (searchRes.status === 401 || searchRes.status === 403) {
+      return res.status(401).json({
+        error: "AUTH_EXPIRED",
+        message: "Google Drive session expired. Please sign in with Google again.",
+      });
+    }
+
+    let folder: { id: string; name: string; webViewLink: string } | null = null;
+    if (searchRes.ok) {
+      const searchData: any = await searchRes.json().catch(() => ({}));
+      if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+        const f = searchData.files[0];
+        folder = {
+          id: f.id,
+          name: f.name || folderName,
+          webViewLink: f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`,
+        };
+      }
+    }
+
+    if (!folder) {
+      const createRes = await fetch(
+        "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: folderName,
+            mimeType: "application/vnd.google-apps.folder",
+            description:
+              "Dedicated backup folder for TidyUps Cleaning App (app.tidyups.cleaning) — Numbered PR6+ Whole Project & Workflows ZIPs",
+          }),
+        }
+      );
+      if (!createRes.ok) {
+        const errBody: any = await createRes.json().catch(() => ({}));
+        return res.status(createRes.status).json({
+          error: errBody?.error?.message || "Failed to create Google Drive backup folder.",
+        });
+      }
+      const created: any = await createRes.json();
+      folder = {
+        id: created.id,
+        name: created.name || folderName,
+        webViewLink: created.webViewLink || `https://drive.google.com/drive/folders/${created.id}`,
+      };
+    }
+
+    // 2. Check existing files in the folder so we know the highest PR# in Drive
+    let highestDrivePr = 5;
+    try {
+      const listQ = encodeURIComponent(`'${folder.id}' in parents and trashed = false`);
+      const listRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${listQ}&fields=files(id,name)&pageSize=30`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (listRes.ok) {
+        const listData: any = await listRes.json().catch(() => ({}));
+        for (const item of listData.files || []) {
+          const m = String(item.name || "").match(/PR(\d+)/i);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (!isNaN(n) && n > highestDrivePr) highestDrivePr = n;
+          }
+        }
+      }
+    } catch {}
+
+    // 3. Either upload a specific already-saved filename from /tmp/tidyups_project_backups or build a fresh numbered ZIP
+    let zipBuffer: Buffer;
+    let filename: string;
+    let prNumber: number;
+    let prLabel: string;
+    let reused = false;
+
+    const requestedFilename = req.body?.filename ? path.basename(String(req.body.filename)) : "";
+    const existingFilePath = requestedFilename ? path.join(CACHED_PROJECT_ZIP_DIR, requestedFilename) : "";
+
+    if (requestedFilename && existingFilePath && fs.existsSync(existingFilePath)) {
+      zipBuffer = fs.readFileSync(existingFilePath);
+      filename = requestedFilename;
+      const m = filename.match(/PR(\d+)/i);
+      prNumber = m ? parseInt(m[1], 10) : highestDrivePr + 1;
+      prLabel = `PR${prNumber}`;
+      reused = true;
+    } else {
+      const requestedPr = req.body?.requestedPr || Math.max(6, highestDrivePr + 1);
+      const built = await getOrCreateWholeProjectZip({
+        forceRebuild: true,
+        incrementPr: true,
+        requestedPr,
+      });
+      zipBuffer = built.buffer;
+      filename = built.filename;
+      prNumber = built.prNumber;
+      prLabel = built.prLabel;
+      reused = built.reused;
+    }
+
+    // 4. Upload the ZIP buffer into Google Drive using multipart related upload
+    const metadata = {
+      name: filename,
+      mimeType: "application/zip",
+      parents: [folder.id],
+      description: `TidyUps Cleaning (${prLabel}) Whole Project & Workflows Archive for app.tidyupscleaning.com`,
+    };
+    const boundary = "-------TidyUpsDriveBoundary" + Date.now();
+    const metaPart = Buffer.from(
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/zip\r\n\r\n`,
+      "utf-8"
+    );
+    const endPart = Buffer.from(`\r\n--${boundary}--`, "utf-8");
+    const multipartBody = Buffer.concat([metaPart, zipBuffer, endPart]);
+
+    const uploadRes = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,size,webViewLink",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": `multipart/related; boundary=${boundary}`,
+          "Content-Length": String(multipartBody.length),
+        },
+        body: multipartBody,
+      }
+    );
+
+    if (!uploadRes.ok) {
+      const errData: any = await uploadRes.json().catch(() => ({}));
+      return res.status(uploadRes.status).json({
+        error: errData?.error?.message || `Google Drive upload failed (${uploadRes.status}).`,
+      });
+    }
+
+    const uploadedFile: any = await uploadRes.json();
+
+    return res.json({
+      success: true,
+      folder,
+      file: uploadedFile,
+      reusedServerZip: reused,
+      prNumber,
+      prLabel,
+      filename,
+      sizeBytes: zipBuffer.length,
+      downloadUrl: `/api/project/download-saved-zip?filename=${encodeURIComponent(filename)}`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: err.message || "Failed to upload project ZIP to Google Drive.",
+    });
   }
 });
 
@@ -10672,10 +11189,19 @@ async function syncFbThreadToSheetAndOptionallyJobber(
   const leadId = thread.syncedLeadId || `fblead-${thread.id}`;
   thread.syncedLeadId = leadId;
 
+  const threadCreatedIso = thread.createdAt || new Date().toISOString();
+  const threadCreatedMs = Date.parse(threadCreatedIso);
+  const freshStartMs = store.cleanSheetConfig?.freshStartFromIso
+    ? Date.parse(store.cleanSheetConfig.freshStartFromIso)
+    : NaN;
+  const ageMs = !Number.isNaN(threadCreatedMs) ? Date.now() - threadCreatedMs : 0;
+  const isOlderThan14Days = ageMs > 14 * 24 * 60 * 60 * 1000;
+  const isBeforeFreshStart = !Number.isNaN(freshStartMs) && !Number.isNaN(threadCreatedMs) && threadCreatedMs < freshStartMs;
+
   const leadItem: any = {
     id: leadId,
-    source: "Facebook",
-    sourceTab: "FB Leads",
+    source: "Facebook AI",
+    sourceTab: "Facebook AI",
     customerName: ext.customerName || thread.customerName || "Facebook Messenger Lead",
     phone: ext.phone || "(780) 555-0199",
     email: ext.email || "",
@@ -10686,7 +11212,8 @@ async function syncFbThreadToSheetAndOptionallyJobber(
     bedrooms: ext.bedrooms || "3 Bedrooms",
     bathrooms: ext.bathrooms || "2 Bathrooms",
     dateOfServiceRequested: ext.preferredDate || new Date().toISOString().slice(0, 10),
-    dateAdded: thread.createdAt || new Date().toISOString(),
+    dateReceived: threadCreatedIso,
+    dateAdded: threadCreatedIso,
     status: thread.syncedQuoteNumber ? "Quoted" : "New",
     verdict: "Good lead",
     quotedAmount: Number(ext.estimatedTotal) || 280,
@@ -10694,12 +11221,13 @@ async function syncFbThreadToSheetAndOptionallyJobber(
     notes: `[${thread.pageName}] [DRAFT FOR OWNER REVIEW] ${ext.specificNotes ? `Notes: ${ext.specificNotes} | ` : ""}Messenger Transcript: ${transcriptSummary}`,
   };
 
-  const existingLeadIdx = store.adLeads.findIndex((l: any) => l.id === leadId);
-  const isFirstLeadSync = existingLeadIdx < 0;
-  if (existingLeadIdx >= 0) {
-    store.adLeads[existingLeadIdx] = { ...store.adLeads[existingLeadIdx], ...leadItem };
-  } else {
-    store.adLeads.unshift(leadItem);
+  if (!isOlderThan14Days && !isBeforeFreshStart && !isOutOfEdmontonOrFakeOrOutdatedLead(leadItem)) {
+    const existingLeadIdx = store.adLeads.findIndex((l: any) => l.id === leadId);
+    if (existingLeadIdx >= 0) {
+      store.adLeads[existingLeadIdx] = { ...store.adLeads[existingLeadIdx], ...leadItem };
+    } else {
+      store.adLeads.unshift(leadItem);
+    }
   }
 
   // Always ensure the Facebook lead is also saved as a client record in store.clients
@@ -12806,7 +13334,7 @@ function upsertCallLeadIntoCleanSheet(
     source: callLogEntry.answeredByAi
       ? `Sonia AI / Missed Call (${callLogEntry.lineName})`
       : `Voice / Quo Call (${callLogEntry.lineName})`,
-    sourceTab: "Voice & Quick Quotes",
+    sourceTab: "Quo",
     campaignName: `Quo ${callLogEntry.lineName} — Transcript Auto-Sync`,
     dateReceived: callLogEntry.timestamp || new Date().toISOString(),
     status: "New",
@@ -16832,15 +17360,20 @@ async function startServer() {
     });
   });
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`\n  ➜  Local:   http://localhost:${PORT}/`);
-    console.log(`  ➜  Network: http://0.0.0.0:${PORT}/`);
-    console.log(`  Dispatch Server ready on port ${PORT} (WebSocket at /ws/chat)\n`);
+  let activeListenPort = PORT;
+  server.listen(activeListenPort, "0.0.0.0", () => {
+    console.log(`\n  ➜  Local:   http://localhost:${activeListenPort}/`);
+    console.log(`  ➜  Network: http://0.0.0.0:${activeListenPort}/`);
+    console.log(`  Dispatch Server ready on port ${activeListenPort} (WebSocket at /ws/chat)\n`);
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE") {
-      console.error(`Port ${PORT} is already in use. Exiting to allow supervisor restart.`);
+    if (err.code === "EADDRINUSE" && activeListenPort !== 3000) {
+      console.warn(`Port ${activeListenPort} is occupied by supervisor; falling back to port 3000...`);
+      activeListenPort = 3000;
+      server.listen(3000, "0.0.0.0");
+    } else if (err.code === "EADDRINUSE") {
+      console.error(`Port ${activeListenPort} is already in use. Exiting to allow supervisor restart.`);
       process.exit(1);
     } else {
       console.error("Server error:", err);

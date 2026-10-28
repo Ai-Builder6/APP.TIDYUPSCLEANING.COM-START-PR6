@@ -49,6 +49,7 @@ import { SpamShieldView } from './components/SpamShieldView';
 import { LiveCallScreenerHUD } from './components/LiveCallScreenerHUD';
 import { AdLeadItem } from './types/lead';
 import { INITIAL_AD_LEADS } from './data/adLeadsData';
+import { filterValidRecentLeads } from './services/styledLeadsWorkbookBuilder';
 import { LegalPagesView, LegalPageType } from './components/LegalPagesView';
 import { CustomerPortalView } from './components/CustomerPortalView';
 import { ThankYouConversionPage } from './components/ThankYouConversionPage';
@@ -366,12 +367,20 @@ export function App() {
     return false;
   });
 
-  // Detect if visitor is on the dedicated customer-only /booking, /book, or /thank-you path
+  // Detect if visitor is on the dedicated customer-only /booking, /book, book.tidyupscleaning.com, or /thank-you path
   const [isStandaloneBookingDomain] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
       const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
       const search = window.location.search.toLowerCase();
+      const isBookSubdomain = host.startsWith('book.') || host.startsWith('www.book.');
+      if (isBookSubdomain && path !== '/thank-you' && path !== '/thankyou') {
+        try {
+          window.history.replaceState({}, '', `/booking${window.location.search}`);
+        } catch {}
+      }
       if (
+        isBookSubdomain ||
         path === '/thank-you' ||
         path === '/thankyou' ||
         path === '/booking/thank-you' ||
@@ -393,12 +402,15 @@ export function App() {
   // Allows the owner inside the staff app to test the locked 1-page customer view
   const [isCustomerLockPreview, setIsCustomerLockPreview] = useState<boolean>(false);
 
-  // Staff & Owner Authentication state
+  // Staff & Owner Authentication state (Owner is signed in automatically on the main console; /booking and book.tidyupscleaning.com stay customer-only)
   const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
       const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
       const search = window.location.search.toLowerCase();
+      const isBookSubdomain = host.startsWith('book.') || host.startsWith('www.book.');
       if (
+        isBookSubdomain ||
         path === '/thank-you' ||
         path === '/thankyou' ||
         path === '/booking/thank-you' ||
@@ -414,12 +426,14 @@ export function App() {
         return false;
       }
       try {
-        return localStorage.getItem('tidyups_verified_password_session') === 'true';
-      } catch {
-        return false;
-      }
+        if (localStorage.getItem('tidyups_verified_password_session') === 'false') {
+          return false;
+        }
+        localStorage.setItem('tidyups_verified_password_session', 'true');
+      } catch {}
+      return true;
     }
-    return false;
+    return true;
   });
 
   // Detect if visitor is on a public legal page (/privacy-policy, /privacy, /data-deletion, /delete-data, /terms, /t&c, /support)
@@ -464,8 +478,22 @@ export function App() {
   // Dedicated Top Bar Navigation Tabs: 'MASTER_HUB' | 'FB_MESSENGER_AI' | 'QUICK_QUOTE' | 'MAP' | 'SCHEDULED_JOBS' | 'MANAGEMENT' | 'INTAKES' | 'CUSTOMER_PORTAL' | 'CLIENTS' | 'ADDRESS_SEARCH' | 'QUOTES' | 'INVOICES' | 'LEGAL' | 'LEADS' | 'SPAM_SHIELD'
   const [activeTopView, setActiveTopView] = useState<'MASTER_HUB' | 'FB_MESSENGER_AI' | 'MAP' | 'CUSTOMER_PORTAL' | 'SCHEDULED_JOBS' | 'CLIENTS' | 'ADDRESS_SEARCH' | 'MANAGEMENT' | 'QUOTES' | 'INVOICES' | 'LEGAL' | 'LEADS' | 'QUICK_QUOTE' | 'INTAKES' | 'SPAM_SHIELD'>(() => {
     if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
       const p = window.location.pathname.toLowerCase().replace(/\/+$/, '');
       const h = window.location.hash.toLowerCase();
+      const s = window.location.search.toLowerCase();
+      const isBookSubdomain = host.startsWith('book.') || host.startsWith('www.book.');
+      if (
+        isBookSubdomain ||
+        p === '/booking' ||
+        p.startsWith('/booking/') ||
+        p === '/book' ||
+        p.startsWith('/book/') ||
+        s.includes('mode=customer') ||
+        s.includes('booking=1')
+      ) {
+        return 'CUSTOMER_PORTAL';
+      }
       if (
         p === '/privacy-policy' ||
         p === '/privacy' ||
@@ -485,19 +513,20 @@ export function App() {
       if (p === '/fb-messenger' || p === '/messenger' || h === '#fb-messenger') {
         return 'FB_MESSENGER_AI';
       }
+      if (p === '/clean-sheet' || p === '/leads' || h === '#clean-sheet' || h === '#leads') {
+        return 'LEADS';
+      }
       try {
-        const isAuth = localStorage.getItem('tidyups_verified_password_session') === 'true';
-        if (!isAuth) return 'CUSTOMER_PORTAL';
         const savedTab = localStorage.getItem('tidyups_active_tab');
-        if (savedTab && ['MASTER_HUB', 'FB_MESSENGER_AI', 'MAP', 'CUSTOMER_PORTAL', 'SCHEDULED_JOBS', 'CLIENTS', 'ADDRESS_SEARCH', 'MANAGEMENT', 'QUOTES', 'INVOICES', 'LEGAL', 'LEADS', 'QUICK_QUOTE', 'INTAKES', 'SPAM_SHIELD'].includes(savedTab)) {
+        if (savedTab && savedTab !== 'CUSTOMER_PORTAL' && ['MASTER_HUB', 'FB_MESSENGER_AI', 'MAP', 'SCHEDULED_JOBS', 'CLIENTS', 'ADDRESS_SEARCH', 'MANAGEMENT', 'QUOTES', 'INVOICES', 'LEGAL', 'LEADS', 'QUICK_QUOTE', 'INTAKES', 'SPAM_SHIELD'].includes(savedTab)) {
           return savedTab as any;
         }
-        return 'MASTER_HUB';
+        return 'LEADS';
       } catch {
-        return 'CUSTOMER_PORTAL';
+        return 'LEADS';
       }
     }
-    return 'CUSTOMER_PORTAL';
+    return 'LEADS';
   });
   const [masterHubFocusBlock, setMasterHubFocusBlock] = useState<MasterHubFocusBlock>(() => {
     if (typeof window !== 'undefined') {
@@ -579,20 +608,8 @@ export function App() {
     return hasDevon ? base : [INITIAL_CLIENTS[0], ...base];
   });
   const [leadsList, setLeadsList] = useState<AdLeadItem[]>(() => {
-    const base = (storedData?.adLeads && storedData.adLeads.length > 0) ? storedData.adLeads : INITIAL_AD_LEADS;
-    return base.map((l: AdLeadItem) =>
-      l.customerName?.toLowerCase().includes('devon clark') || (l.phone || '').includes('802-4918')
-        ? {
-            ...l,
-            verdict: l.verdict || 'Good lead',
-            quotedAmount: l.quotedAmount || 186.9,
-            quoteId: l.quoteId || 'qt-devon-clarke-2410',
-            quoteNumber: l.quoteNumber || 'QT-2410',
-            jobberClientId: l.jobberClientId || 'jobber-client-devon-clarke',
-            isJobberSynced: true,
-          }
-        : l
-    );
+    const base = Array.isArray(storedData?.adLeads) ? storedData.adLeads : [];
+    return filterValidRecentLeads(base);
   });
   const [isQuickQuoteModalOpen, setIsQuickQuoteModalOpen] = useState<boolean>(false);
   const [selectedLeadForQuickQuote, setSelectedLeadForQuickQuote] = useState<AdLeadItem | null>(null);
@@ -663,6 +680,7 @@ export function App() {
   // Streamlined Top Header Main Workflow Buttons (All secondary owner buttons live inside MANAGEMENT / Owner Hub)
   const DEFAULT_HEADER_NAV_ORDER = [
     'MASTER_HUB',
+    'LEADS',
     'QUOTES',
     'FB_MESSENGER_AI',
     'QUICK_QUOTE',
@@ -699,7 +717,7 @@ export function App() {
   const [headerNavOrder, setHeaderNavOrder] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem('tidyups_header_nav_order_v3');
+        const saved = localStorage.getItem('tidyups_header_nav_order_v4');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -887,25 +905,13 @@ export function App() {
     }
   }, []);
 
-  // Merge leads from backend Google Sheets / Ad Leads endpoint without ever overwriting newer local leads
+  // Sync leads from backend Google Sheets / Ad Leads endpoint with strict 14-day & 7-day uncommunicated filtering
   useEffect(() => {
     fetch(`/api/leads?project=${activeProjectId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data && Array.isArray(data.leads) && data.leads.length > 0) {
-          setLeadsList((prev) => {
-            const byId = new Map<string, AdLeadItem>();
-            for (const item of data.leads) {
-              if (item && item.id) byId.set(String(item.id), item);
-            }
-            for (const localItem of prev) {
-              if (localItem && localItem.id) {
-                const serverItem = byId.get(String(localItem.id));
-                byId.set(String(localItem.id), serverItem ? { ...localItem, ...serverItem } : localItem);
-              }
-            }
-            return Array.from(byId.values());
-          });
+        if (data && Array.isArray(data.leads)) {
+          setLeadsList(filterValidRecentLeads(data.leads));
         }
       })
       .catch((err) => console.warn('Leads fetch error:', err));
@@ -1454,23 +1460,12 @@ export function App() {
         });
         const data = await res.json();
         if (data?.success) {
-          if (Array.isArray(data.leads) && data.leads.length > 0) {
-            setLeadsList((prev) => {
-              const byId = new Map<string, AdLeadItem>();
-              for (const l of prev) {
-                if (l && l.id) byId.set(String(l.id), l);
-              }
-              for (const l of data.leads) {
-                if (l && l.id) {
-                  const existing = byId.get(String(l.id));
-                  if (!existing) {
-                    saveLeadToFirestore(l).catch(() => {});
-                  }
-                  byId.set(String(l.id), existing ? { ...existing, ...l } : l);
-                }
-              }
-              return Array.from(byId.values());
-            });
+          if (Array.isArray(data.leads)) {
+            const cleanLeads = filterValidRecentLeads(data.leads);
+            setLeadsList(cleanLeads);
+            for (const l of cleanLeads) {
+              saveLeadToFirestore(l).catch(() => {});
+            }
           }
           if (Array.isArray(data.quotes) && data.quotes.length > 0) {
             setQuotesList((prev) => dedupeQuotesList([...data.quotes, ...prev]));
@@ -1874,6 +1869,8 @@ export function App() {
         setActiveTopView('MAP');
       } else if (path === '/voice' || hash === '#voice' || path === '/quote' || hash === '#quote' || path === '/intake' || hash === '#intake') {
         setActiveTopView('QUICK_QUOTE');
+      } else if (path === '/clean-sheet' || hash === '#clean-sheet' || path === '/leads' || hash === '#leads') {
+        setActiveTopView('LEADS');
       } else if (path === '/intakes' || hash === '#intakes') {
         setActiveTopView('INTAKES');
       } else if (path === '/clients' || hash === '#clients') {
@@ -2024,20 +2021,8 @@ export function App() {
           if (data.quoCallLogs && data.quoCallLogs.length > 0) setQuoCallsList(data.quoCallLogs);
           if (data.spamShieldConfig) setSpamShieldConfig(data.spamShieldConfig);
           if (data.blockedCallsHistory && data.blockedCallsHistory.length > 0) setBlockedCallsHistory(data.blockedCallsHistory);
-          if (data.adLeads && data.adLeads.length > 0) {
-            setLeadsList((prev) => {
-              const byId = new Map<string, AdLeadItem>();
-              for (const l of prev) {
-                if (l && l.id) byId.set(String(l.id), l);
-              }
-              for (const l of data.adLeads) {
-                if (l && l.id) {
-                  const existing = byId.get(String(l.id));
-                  byId.set(String(l.id), existing ? { ...existing, ...l } : l);
-                }
-              }
-              return Array.from(byId.values());
-            });
+          if (Array.isArray(data.adLeads)) {
+            setLeadsList(filterValidRecentLeads(data.adLeads));
           }
           if (data.serviceCatalog && data.serviceCatalog.length > 0) setServiceCatalog(data.serviceCatalog);
           if (Array.isArray(data.headerNavOrder) && data.headerNavOrder.length > 0) {
@@ -2113,15 +2098,16 @@ export function App() {
   // Incremental Delta Persistence whenever Leads or Quotes are added/edited in any view
   const handleLeadsUpdated = useCallback(
     (updatedLeads: AdLeadItem[]) => {
-      setLeadsList(updatedLeads);
+      const cleanUpdated = filterValidRecentLeads(updatedLeads);
+      setLeadsList(cleanUpdated);
       setLastSyncedAllAt(new Date().toISOString());
       fetch(`/api/store/save?project=${activeProjectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-project-id': activeProjectId },
-        body: JSON.stringify({ adLeads: updatedLeads }),
+        body: JSON.stringify({ adLeads: cleanUpdated }),
       }).catch(() => {});
       // Delta-sync top changed leads to Firestore
-      updatedLeads.slice(0, 15).forEach((lead) => {
+      cleanUpdated.slice(0, 15).forEach((lead) => {
         saveLeadToFirestore(lead).catch(() => {});
       });
     },
@@ -2949,6 +2935,27 @@ export function App() {
                             activeTopView === 'MASTER_HUB' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'
                           }`}>
                             {leadsList.length + quotesList.length}
+                          </span>
+                        </button>
+                      );
+                    } else if (btnKey === 'LEADS') {
+                      buttonElement = (
+                        <button
+                          id="nav-tab-clean-leads-sheet"
+                          onClick={() => setActiveTopView('LEADS')}
+                          className={`min-h-[34px] px-3.5 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeTopView === 'LEADS'
+                              ? 'bg-gradient-to-r from-teal-600 via-emerald-600 to-green-600 text-white shadow-sm ring-2 ring-teal-500/30'
+                              : 'bg-teal-50 text-teal-950 hover:bg-teal-100 border border-teal-300'
+                          }`}
+                          title="Brand-New 7-Tab Clean Leads Sheet (Facebook Leads 1, Facebook Leads 2, Google Leads 1, Google Leads 2, Other Ads, Facebook AI, Quo)"
+                        >
+                          <FileSpreadsheet className={`w-3.5 h-3.5 ${activeTopView === 'LEADS' ? 'text-white' : 'text-teal-600'}`} />
+                          <span>✨ 7-Tab Clean Leads Sheet</span>
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                            activeTopView === 'LEADS' ? 'bg-white/20 text-white' : 'bg-teal-200/80 text-teal-900'
+                          }`}>
+                            {leadsList.length}
                           </span>
                         </button>
                       );
@@ -3985,6 +3992,16 @@ export function App() {
                 >
                   /privacy
                 </button>
+                <span>•</span>
+                <button
+                  onClick={() => {
+                    setActiveTopView('CUSTOMER_PORTAL');
+                  }}
+                  className="text-emerald-300 hover:text-emerald-200 font-bold cursor-pointer"
+                  title="Open Customer Booking Page (https://app.tidyupscleaning.com/booking)"
+                >
+                  /booking
+                </button>
               </div>
 
               {/* Rearrange Header & Footer Buttons Control */}
@@ -4224,21 +4241,15 @@ export function App() {
                   btnNode = (
                     <button
                       type="button"
-                      onClick={async () => {
-                        try {
-                          setSyncAllStatusMessage('📦 Preparing numbered Backup ZIP download...');
-                          const res = await saveAndDownloadNumberedProjectBackupZip();
-                          setSyncAllStatusMessage(`✅ Downloaded ${res.fileName} to your device!`);
-                          setTimeout(() => setSyncAllStatusMessage(null), 5000);
-                        } catch {
-                          setIsProjectBackupModalOpen(true);
-                        }
+                      onClick={() => {
+                        setProjectBackupInitialTab('BACKUP_DRIVE');
+                        setIsProjectBackupModalOpen(true);
                       }}
                       className="px-2 py-0.5 rounded-md bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-[10px] flex items-center gap-1 border border-cyan-300/50 cursor-pointer transition-all active:scale-95 whitespace-nowrap"
-                      title="1-Click Download Numbered Project Backup ZIP directly from app.tidyupscleaning.com (No Google popup needed)"
+                      title="Open Project Backup ZIP & Google Drive Loader (Build PR# ZIP, Load to Google Drive, or Download)"
                     >
                       <FileArchive className="w-3 h-3 text-white shrink-0" />
-                      <span>Backup ZIP</span>
+                      <span>Backup ZIP &amp; Drive</span>
                     </button>
                   );
                 } else if (btnKey === 'BLOCK_SPAM') {

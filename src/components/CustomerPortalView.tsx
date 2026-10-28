@@ -88,7 +88,7 @@ const OFFICIAL_COMPANY_BANNERS = [
     id: 'banner-bunny-wrap',
     src: '/assets/aistudio/39x14_ver_0001__1__d4ddd987.png',
     title: 'TidyUps Cleaning Service — Official Bunny Fleet & Vetted Edmonton Teams',
-    caption: 'Move-Out • Basic • Deep Cleaning • app.tidyupscleaning.com/book',
+    caption: 'Move-Out • Basic • Deep Cleaning • app.tidyupscleaning.com/booking',
   },
   {
     id: 'banner-desktop-bunny',
@@ -218,18 +218,38 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   const bookingFormRef = useRef<HTMLDivElement | null>(null);
   const datePickerContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Detect URL parameters (?source=facebook, ?source=google, ?fbclid=..., ?gclid=...)
+  // Detect URL parameters (?source=facebook_leads_1, ?source=google_leads_1, ?fbclid=..., ?gclid=...)
   const initialSourceFromUrl = useMemo(() => {
-    if (typeof window === 'undefined') return 'Website (tidyupscleaning.com)';
+    if (typeof window === 'undefined') return 'Google Search / Ad';
     const params = new URLSearchParams(window.location.search);
-    const src = (params.get('source') || params.get('utm_source') || '').toLowerCase();
-    if (src.includes('fb') || src.includes('facebook') || src.includes('instagram') || params.has('fbclid')) {
+    const src = (
+      params.get('source') ||
+      params.get('utm_source') ||
+      params.get('tab') ||
+      params.get('utm_campaign') ||
+      ''
+    ).toLowerCase();
+    const ref = (document.referrer || '').toLowerCase();
+    if (src.includes('facebook_leads_2') || src.includes('fb2') || src.includes('facebook 2')) {
+      return 'Facebook Ad (Campaign 2)';
+    }
+    if (
+      src.includes('fb') ||
+      src.includes('facebook') ||
+      src.includes('instagram') ||
+      params.has('fbclid') ||
+      ref.includes('facebook.com') ||
+      ref.includes('instagram.com')
+    ) {
       return 'Facebook / Instagram Ad';
     }
-    if (src.includes('google') || params.has('gclid')) {
+    if (src.includes('google_leads_2') || src.includes('google2') || src.includes('google 2')) {
+      return 'Google Search / Ad (Campaign 2)';
+    }
+    if (src.includes('google') || params.has('gclid') || ref.includes('google.')) {
       return 'Google Search / Ad';
     }
-    return 'Website (tidyupscleaning.com)';
+    return 'Website (app.tidyupscleaning.com/booking)';
   }, []);
 
   const [activeLegalModal, setActiveLegalModal] = useState<'PRIVACY' | 'TERMS' | 'SUPPORT' | null>(() => {
@@ -728,7 +748,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       if (data?.success) {
         setStaffStatusMessage(
           data.message ||
-            '✓ Reconnected Facebook Lead Ads, Google Ads Webhooks & Google Sheets! All new customer bookings on app.tidyupscleaning.com/book flow straight into your Master Leads Table.'
+            '✓ Reconnected Facebook Lead Ads, Google Ads Webhooks & Google Sheets! All new customer bookings on app.tidyupscleaning.com/booking flow straight into your 7-tab Google Sheet & Master Leads Table.'
         );
         if (onLeadsReconnected) {
           onLeadsReconnected({
@@ -876,65 +896,82 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       latestTranscriptRef.current = dictationText;
       latestInterimRef.current = '';
 
-      const rec = new SpeechRec();
-      rec.lang = 'en-CA';
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.maxAlternatives = 3;
+      const startContinuousRec = () => {
+        const rec = new SpeechRec();
+        rec.lang = 'en-CA';
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.maxAlternatives = 3;
 
-      rec.onstart = () => {
-        setIsRecordingFormVoice(true);
-        setVoiceFillStatus(
-          '🎙️ Continuous Mic Active (Will NOT shut off when you pause!) — Speak First & Last Name, Phone, Address, Bedrooms, Bathrooms & Preferred Date...'
-        );
-      };
+        rec.onstart = () => {
+          setIsRecordingFormVoice(true);
+          setVoiceFillStatus(
+            '🎙️ Continuous Mic Active (Will NOT shut off when you pause!) — Speak First & Last Name, Phone, Address, Bedrooms, Bathrooms & Preferred Date...'
+          );
+        };
 
-      rec.onresult = (ev: any) => {
-        let finalChunk = '';
-        let interimChunk = '';
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const t = ev.results[i][0].transcript;
-          if (ev.results[i].isFinal) {
-            finalChunk += t + ' ';
-          } else {
-            interimChunk += t;
+        rec.onresult = (ev: any) => {
+          let finalChunk = '';
+          let interimChunk = '';
+          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+            const t = ev.results[i][0].transcript;
+            if (ev.results[i].isFinal) {
+              finalChunk += t + ' ';
+            } else {
+              interimChunk += t;
+            }
           }
-        }
-        const prevBase = latestTranscriptRef.current;
-        const updated = finalChunk ? `${prevBase} ${finalChunk}`.trim() : prevBase;
-        latestTranscriptRef.current = updated;
-        latestInterimRef.current = interimChunk;
+          const prevBase = latestTranscriptRef.current;
+          const updated = finalChunk ? `${prevBase} ${finalChunk}`.trim() : prevBase;
+          latestTranscriptRef.current = updated;
+          latestInterimRef.current = interimChunk;
 
-        const combinedLive = `${updated} ${interimChunk}`.trim();
-        if (combinedLive) {
-          applyLiveSpeechExtraction(combinedLive);
-        }
-        setDictationText(updated);
-        setInterimDictation(interimChunk);
-      };
+          const combinedLive = `${updated} ${interimChunk}`.trim();
+          if (combinedLive) {
+            applyLiveSpeechExtraction(combinedLive);
+          }
+          setDictationText(updated);
+          setInterimDictation(interimChunk);
+        };
 
-      rec.onerror = (ev: any) => {
-        if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') {
-          shouldKeepRecordingRef.current = false;
-          setIsRecordingFormVoice(false);
-          setVoiceFillStatus('Microphone access was blocked by browser permissions.');
-        }
-      };
+        rec.onerror = (ev: any) => {
+          if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') {
+            shouldKeepRecordingRef.current = false;
+            setIsRecordingFormVoice(false);
+            setVoiceFillStatus('Microphone access was blocked by browser permissions.');
+          }
+        };
 
-      rec.onend = () => {
-        // Automatically restart on pause so the mic NEVER shuts off until the user clicks Stop!
-        if (shouldKeepRecordingRef.current) {
-          try {
-            rec.start();
+        rec.onend = () => {
+          if (latestInterimRef.current.trim()) {
+            const merged = `${latestTranscriptRef.current} ${latestInterimRef.current}`.trim();
+            latestTranscriptRef.current = merged;
+            latestInterimRef.current = '';
+            setDictationText(merged);
+            setInterimDictation('');
+          }
+          if (shouldKeepRecordingRef.current) {
+            setTimeout(() => {
+              if (!shouldKeepRecordingRef.current) return;
+              try {
+                rec.start();
+              } catch {
+                try {
+                  startContinuousRec();
+                } catch {}
+              }
+            }, 90);
             return;
-          } catch {}
-        }
-        setIsRecordingFormVoice(false);
-        setInterimDictation('');
+          }
+          setIsRecordingFormVoice(false);
+          setInterimDictation('');
+        };
+
+        recognitionRef.current = rec;
+        rec.start();
       };
 
-      recognitionRef.current = rec;
-      rec.start();
+      startContinuousRec();
     } catch {
       shouldKeepRecordingRef.current = false;
       setIsRecordingFormVoice(false);
@@ -1041,12 +1078,26 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           specialInstructions: specialInstructions.trim(),
           heardAbout,
           bookingFormVariant: 'CALCULATOR',
-          utmSource:
-            heardAbout.includes('Facebook')
-              ? 'Facebook Leads'
+          adTab:
+            heardAbout.includes('Facebook') && heardAbout.includes('2')
+              ? 'Facebook Leads 2'
+              : heardAbout.includes('Facebook') || heardAbout.includes('Instagram')
+              ? 'Facebook Leads 1'
+              : heardAbout.includes('Google') && heardAbout.includes('2')
+              ? 'Google Leads 2'
               : heardAbout.includes('Google')
-              ? 'Google Leads'
-              : 'app.tidyupscleaning.com/book',
+              ? 'Google Leads 1'
+              : 'Other Ads',
+          utmSource:
+            heardAbout.includes('Facebook') && heardAbout.includes('2')
+              ? 'Facebook Leads 2'
+              : heardAbout.includes('Facebook') || heardAbout.includes('Instagram')
+              ? 'Facebook Leads 1'
+              : heardAbout.includes('Google') && heardAbout.includes('2')
+              ? 'Google Leads 2'
+              : heardAbout.includes('Google')
+              ? 'Google Leads 1'
+              : 'app.tidyupscleaning.com/booking',
         }),
       });
 
@@ -1138,7 +1189,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   return (
     <div className="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-black font-sans text-white">
       {/* ─────────────────────────────────────────────────────────────────────────────
-          OWNER-ONLY CONTROL BAR (NEVER SHOWN TO CUSTOMERS ON app.tidyupscleaning.com/book)
+          OWNER & JESS CONTROL BAR (NEVER SHOWN TO CUSTOMERS ON app.tidyupscleaning.com/booking)
          ───────────────────────────────────────────────────────────────────────────── */}
       {showStaffPreviewBanner && !isCustomerLockPreview && (
         <div className="bg-zinc-950 text-white px-4 py-3 border-b-2 border-pink-500 shadow-lg">
@@ -1146,18 +1197,13 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
             <div className="flex items-start sm:items-center gap-3 flex-wrap">
               <span className="px-2.5 py-1 rounded-full bg-gradient-to-r from-pink-500 to-red-600 text-white text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                 <Lock className="w-3.5 h-3.5" />
-                <span>Customer Quote &amp; Voice Booking Page (/book)</span>
+                <span>Official Customer Booking Page (/booking)</span>
               </span>
               <div className="text-xs text-zinc-200">
-                <strong className="text-pink-400">Live Customer Booking URLs:</strong>{' '}
+                <strong className="text-pink-400">Official Booking Link (for Jess&apos;s FB &amp; Google Ads + tidyupscleaning.com/booking):</strong>{' '}
                 <code className="px-1.5 py-0.5 rounded bg-zinc-900 border border-pink-500/40 text-pink-300 font-mono font-bold">
-                  https://app.tidyupscleaning.com/book
-                </code>{' '}
-                (Voice + Lit-Box Quote Calculator) &amp;{' '}
-                <code className="px-1.5 py-0.5 rounded bg-zinc-900 border border-red-500/40 text-red-300 font-mono font-bold">
                   https://app.tidyupscleaning.com/booking
-                </code>{' '}
-                (Simple 3-Option Form).
+                </code>
               </div>
             </div>
 
@@ -1169,22 +1215,13 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                 title="Switch to the Simple 3-Option Booking Form (/booking: Move-Out, Basic, Deep)"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Switch to /booking (3-Option Form)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleCopyBookingLink('main', 'https://app.tidyupscleaning.com/book')}
-                className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-pink-500 text-pink-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
-              >
-                {copiedLinkKey === 'main' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLinkKey === 'main' ? 'Copied /book!' : 'Copy /book Link'}</span>
+                <span>Switch to 3-Option /booking View</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleCopyBookingLink('booking3', 'https://app.tidyupscleaning.com/booking')}
-                className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-red-500 text-red-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-pink-500 text-pink-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
               >
                 {copiedLinkKey === 'booking3' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedLinkKey === 'booking3' ? 'Copied /booking!' : 'Copy /booking Link'}</span>
@@ -1352,7 +1389,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           <div className="lg:col-span-6 space-y-4 text-center lg:text-left">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-pink-600 to-red-600 text-white text-xs font-black uppercase tracking-wide shadow-md">
               <Sparkles className="w-4 h-4" />
-              <span>🐰 TidyUps Bunny Voice &amp; Instant Quote Portal • app.tidyupscleaning.com/book</span>
+              <span>🐰 TidyUps Bunny Voice &amp; Instant Quote Portal • app.tidyupscleaning.com/booking</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight leading-tight">
@@ -1450,7 +1487,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               </div>
               <div className="flex items-center justify-between px-1 text-[11px] font-extrabold text-zinc-300">
                 <span className="truncate">{OFFICIAL_COMPANY_BANNERS[activeBannerIdx].title}</span>
-                <span className="text-pink-400 font-mono shrink-0 ml-2">app.tidyupscleaning.com/book</span>
+                <a href="/booking" className="text-pink-400 hover:underline font-mono shrink-0 ml-2">app.tidyupscleaning.com/booking</a>
               </div>
             </div>
           </div>
@@ -2531,7 +2568,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     TidyUps Cleaning Service Inc.
                   </h2>
                   <p className="text-[11px] text-pink-400 font-mono">
-                    https://app.tidyupscleaning.com/book • https://tidyupscleaning.com
+                    https://app.tidyupscleaning.com/booking • https://tidyupscleaning.com
                   </p>
                 </div>
               </div>
