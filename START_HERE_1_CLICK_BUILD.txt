@@ -1,0 +1,40 @@
+===============================================================================
+  TIDYUPS CLEANING SERVICE INC. (app.tidyupscleaning.com) — PR16 ARCHIVE
+  HOW TO BUILD & RUN THIS ENTIRE PROJECT IN 1 CLICK
+===============================================================================
+
+OPTION A — WINDOWS (1-CLICK BUTTON):
+  1. Unzip this folder to your computer.
+  2. Double-click: CLICK_TO_BUILD_AND_RUN_WINDOWS.bat
+  3. It will automatically install dependencies (npm install), build the app
+     (npm run build), open http://localhost:3000, and start the server!
+
+OPTION B — MAC / LINUX (1-CLICK BUTTON):
+  1. Unzip this folder to your computer.
+  2. Double-click: CLICK_TO_BUILD_AND_RUN_MAC.command
+     (or run: bash CLICK_TO_BUILD_AND_RUN_MAC.command)
+
+OPTION C — TERMINAL / CURSOR / AI STUDIO / CLAUDE CODE:
+  Run this single command:
+     npm run oneclick
+
+===============================================================================
+  ALL 6 BOTS & RECENT UPDATES INCLUDED IN THIS ZIP:
+===============================================================================
+  1. Jobber CRM OAuth 2.0, GraphQL 2-Way Sync, Developer Kit & Webhook Bot
+     - Includes Tab 1 Live Auth Status Verifier & Fake/Draft Quote Purge
+  2. Facebook Messenger 24/7 AI Sales, Quote & Lead Intake Bot (3 Pages)
+  3. Continuous Voice Dictation & Gemini AI Phone Quote Bot + Closest Van Map
+  4. Quo (OpenPhone) 6-Line Call Transcript & Sonia AI Lead Engine Bot
+     - Includes Default Placeholder vs. Verified Caller Info Badges & SMS Sync
+  5. Twilio Bam Shield / Spam Shield + Live Incoming Call List (All/Allowed/Blocked)
+  6. 9-Tab Visual Clean Google Sheets Builder (RFC 2387 multipart — no 'blob' tab)
+
+  PUBLIC PAGES INCLUDED:
+  - https://app.tidyupscleaning.com/booking    (100% Blank Fresh Start + Start Over Button)
+  - https://app.tidyupscleaning.com/thank-you  (Conversion Tracking & Booking Confirmation)
+  - https://app.tidyupscleaning.com/support    (Customer & Jobber Marketplace Support)
+  - https://app.tidyupscleaning.com/contact    (Public Contact Us & Direct Dispatch Form)
+  - https://app.tidyupscleaning.com/T&C        (Official Terms & Conditions)
+  - https://app.tidyupscleaning.com/privacy    (Official Privacy Policy)
+===============================================================================

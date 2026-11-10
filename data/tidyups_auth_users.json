@@ -6,10 +6,10 @@
     "email": "cleaningserviceyeg@gmail.com",
     "phone": "(780) 718-5092",
     "title": "Owner & Executive Director (No Password Required)",
-    "noPasswordRequired": false,
+    "noPasswordRequired": true,
     "requireLiveLocation": true,
-    "pin": "196969",
-    "password": "Cleaning2026!@",
+    "pin": "1001",
+    "password": "",
     "customPermissions": {
       "hasFullAccess": true
     }
@@ -22,10 +22,10 @@
     "phone": "(780) 718-5092",
     "assignedVan": "Executive HQ",
     "title": "Executive Admin & Owner",
-    "noPasswordRequired": false,
-    "requireLiveLocation": true,
-    "pin": "195959",
-    "password": "Cleaning2026!@",
+    "noPasswordRequired": true,
+    "requireLiveLocation": false,
+    "pin": "1002",
+    "password": "",
     "customPermissions": {
       "hasFullAccess": true
     }

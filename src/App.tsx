@@ -90,7 +90,7 @@ import { MobileBottomNav } from './components/MobileBottomNav';
 import { BookMyCleaningLogo } from './components/BookMyCleaningLogo';
 import { AddressSearchRadarView } from './components/AddressSearchRadarView';
 import { QuickMapScheduleRadarView } from './components/QuickMapScheduleRadarView';
-import { JobberQuote, JobberInvoice } from './services/jobberSyncModules';
+import { JobberQuote, JobberInvoice, isFakeOrPurgedJobberQuote } from './services/jobberSyncModules';
 import {
   AppUser,
   APP_USERS,
@@ -176,6 +176,14 @@ export function isFakeSimulationItem(item: any): boolean {
     name.includes('chloe bennett') ||
     name.includes('liam & chloe') ||
     name.includes('al-mansoor') ||
+    name.includes('sheralee') ||
+    name.includes('donna noel') ||
+    name.includes('blaze (phone lead)') ||
+    name.includes('aniket deb (sonia ai') ||
+    name.includes('new call [') ||
+    name.includes('rahum') ||
+    name.includes('sync test') ||
+    name.includes('john doe') ||
     name.includes('simulation') ||
     name.includes('fake')
   ) {
@@ -269,7 +277,7 @@ function dedupeQuotesList(rawQuotes: any[]): JobberQuote[] {
   const uniqueByKey: JobberQuote[] = [];
 
   for (const q of rawQuotes) {
-    if (!q || isFakeSimulationItem(q)) continue;
+    if (!q || isFakeSimulationItem(q) || isFakeOrPurgedJobberQuote(q)) continue;
     const id = String(q.id || '').trim();
     const num = String(q.quoteNumber || '').trim();
     if (!id && !num) continue;
@@ -285,9 +293,11 @@ function dedupeQuotesList(rawQuotes: any[]): JobberQuote[] {
 
 export function App() {
   const [apiKey, setApiKey] = useState<string>(
-    import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyC4kxdVgVTNm5ppd8IuK7rqq-Rz_EV31Ns'
+    import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
   );
-  const [mapsAuthError, setMapsAuthError] = useState<boolean>(false);
+  const [mapsAuthError, setMapsAuthError] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? Boolean((window as any).__GOOGLE_MAPS_AUTH_FAILED__) : false
+  );
   const [refererErrorUrl, setRefererErrorUrl] = useState<string | null>(null);
   const [quotaExceeded, setQuotaExceeded] = useState<boolean>(false);
   // Read locally cached dispatch data immediately so user entries never vanish on refresh
@@ -324,7 +334,18 @@ export function App() {
   const [urgencyFilter, setUrgencyFilter] = useState<'ALL' | UrgencyLevel>('ALL');
   const [mobileView, setMobileView] = useState<'map' | 'board'>('map');
   const [kanbanActiveTab, setKanbanActiveTab] = useState<'BOARD' | 'UNASSIGNED'>('BOARD');
-  const [isJobberModalOpen, setIsJobberModalOpen] = useState<boolean>(false);
+  const [isJobberModalOpen, setIsJobberModalOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.search.toLowerCase().includes('jobber_connected=true');
+    }
+    return false;
+  });
+  const [jobberModalInitialTab, setJobberModalInitialTab] = useState<'CREDENTIALS' | 'APP_INFO_KIT' | 'CSV_IMPORT' | 'JOBBER' | 'GOOGLE_SHEETS'>(() => {
+    if (typeof window !== 'undefined' && window.location.search.toLowerCase().includes('jobber_connected=true')) {
+      return 'JOBBER';
+    }
+    return 'CREDENTIALS';
+  });
   const [isPublicBookingModalOpen, setIsPublicBookingModalOpen] = useState<boolean>(false);
   const [isQuoModalOpen, setIsQuoModalOpen] = useState<boolean>(false);
 
@@ -436,7 +457,7 @@ export function App() {
     return true;
   });
 
-  // Detect if visitor is on a public legal page (/privacy-policy, /privacy, /data-deletion, /delete-data, /terms, /t&c, /support)
+  // Detect if visitor is on a public legal page (/privacy-policy, /privacy, /data-deletion, /delete-data, /terms, /t&c, /support, /contact, /contact-us, /help)
   const isPublicLegalPath = (() => {
     if (typeof window !== 'undefined') {
       const p = window.location.pathname.toLowerCase().replace(/\/+$/, '');
@@ -449,11 +470,15 @@ export function App() {
         p === '/terms' ||
         p === '/t&c' ||
         p === '/support' ||
+        p === '/help' ||
+        p === '/contact' ||
+        p === '/contact-us' ||
         h === '#privacy-policy' ||
         h === '#privacy' ||
         h === '#data-deletion' ||
         h === '#terms' ||
-        h === '#support'
+        h === '#support' ||
+        h === '#contact'
       );
     }
     return false;
@@ -502,11 +527,15 @@ export function App() {
         p === '/terms' ||
         p === '/t&c' ||
         p === '/support' ||
+        p === '/help' ||
+        p === '/contact' ||
+        p === '/contact-us' ||
         h === '#privacy-policy' ||
         h === '#privacy' ||
         h === '#data-deletion' ||
         h === '#terms' ||
-        h === '#support'
+        h === '#support' ||
+        h === '#contact'
       ) {
         return 'LEGAL';
       }
@@ -541,7 +570,69 @@ export function App() {
   });
   const [isSyncingEverything, setIsSyncingEverything] = useState<boolean>(false);
   const [lastSyncedAllAt, setLastSyncedAllAt] = useState<string | null>(() => new Date().toISOString());
-  const [syncAllStatusMessage, setSyncAllStatusMessage] = useState<string | null>(null);
+  const [syncAllStatusMessage, setSyncAllStatusMessage] = useState<string | null>(() => {
+    if (typeof window !== 'undefined' && window.location.search.toLowerCase().includes('jobber_connected=true')) {
+      return '✅ Jobber OAuth Verified & Connected! Live 5-module synchronization is active.';
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.location.search.toLowerCase().includes('jobber_connected=true')) {
+      setIsJobberModalOpen(true);
+      setJobberModalInitialTab('JOBBER');
+      setSyncAllStatusMessage('✅ Jobber OAuth Verified & Connected! Live 5-module synchronization is active.');
+      fetch('/api/jobber/oauth/refresh-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).catch(() => {});
+      try {
+        window.history.replaceState({}, '', window.location.pathname || '/');
+      } catch {}
+    }
+
+    const onJobberConnected = () => {
+      setSyncAllStatusMessage('✅ Jobber OAuth Verified & Connected! Live 5-module synchronization is active.');
+      setJobberModalInitialTab('JOBBER');
+    };
+
+    const handleMsg = (e: MessageEvent) => {
+      if (e.data?.type === 'JOBBER_CONNECTED' || e.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        onJobberConnected();
+      }
+    };
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'tidyups_jobber_connected_signal') {
+        onJobberConnected();
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    window.addEventListener('storage', handleStorage);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('tidyups_jobber_oauth');
+        bc.onmessage = (e) => {
+          if (e.data?.type === 'JOBBER_CONNECTED') {
+            onJobberConnected();
+          }
+        };
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener('message', handleMsg);
+      window.removeEventListener('storage', handleStorage);
+      if (bc) {
+        try {
+          bc.close();
+        } catch {}
+      }
+    };
+  }, []);
   const [deltaSyncStats, setDeltaSyncStats] = useState<{
     deltaWritesCount: number;
     unchangedSkippedCount: number;
@@ -558,6 +649,15 @@ export function App() {
     if (typeof window !== 'undefined') {
       const p = window.location.pathname.toLowerCase().replace(/\/+$/, '');
       const h = window.location.hash.toLowerCase();
+      if (p === '/support' || p === '/help' || h === '#support') {
+        return 'SUPPORT';
+      }
+      if (p === '/contact' || p === '/contact-us' || h === '#contact') {
+        return 'CONTACT';
+      }
+      if (p === '/terms' || p === '/t&c' || h === '#terms') {
+        return 'TERMS';
+      }
       if (
         p === '/privacy-policy' ||
         p === '/privacy' ||
@@ -568,9 +668,6 @@ export function App() {
         h === '#data-deletion'
       ) {
         return 'PRIVACY';
-      }
-      if (p === '/terms' || p === '/t&c' || h === '#terms') {
-        return 'TERMS';
       }
     }
     return 'SUPPORT';
@@ -603,7 +700,11 @@ export function App() {
     return CANONICAL_JOBBER_STAFF;
   });
   const [clientsList, setClientsList] = useState<ClientRecord[]>(() => {
-    const base = (storedData?.clients && storedData.clients.length > 0) ? storedData.clients : INITIAL_CLIENTS;
+    const rawBase = (storedData?.clients && storedData.clients.length > 0) ? storedData.clients : INITIAL_CLIENTS;
+    const base = rawBase.filter((c: ClientRecord) => {
+      const n = String(c?.name || '').toLowerCase();
+      return !n.includes('sheralee') && !n.includes('donna noel') && !isFakeSimulationItem(c);
+    });
     const hasDevon = base.some((c: ClientRecord) => c.name?.toLowerCase().includes('devon clark') || (c.phone || '').includes('802-4918'));
     return hasDevon ? base : [INITIAL_CLIENTS[0], ...base];
   });
@@ -1999,7 +2100,7 @@ export function App() {
               if (!cloudMap || Object.keys(cloudMap).length === 0) return;
               setTechnicians((prev) =>
                 prev.map((t) => {
-                  const cloud = cloudMap[t.id];
+                  const cloud = cloudMap[t.id] as any;
                   if (!cloud) return t;
                   const hasValidVan = cloud.vanNumber && !/^unit\s+\d+$/i.test(String(cloud.vanNumber).trim());
                   return {
@@ -2051,19 +2152,44 @@ export function App() {
               localStorage.setItem('tidyups_footer_side_v2', data.footerButtonsSide);
             } catch {}
           }
-          // Restore last workspace state from server if user didn't already have a local tab or deep-link URL
+          // Do not overwrite activeTopView after mount so clicking Apply or switching tabs never jumps back or restarts the view
           if (data.workspaceState && typeof window !== 'undefined') {
-            const path = window.location.pathname.toLowerCase();
-            const hash = window.location.hash.toLowerCase();
-            const isRoot = (path === '/' || path === '') && !hash;
-            const localSavedTab = localStorage.getItem('tidyups_active_tab');
-            if (isRoot && !localSavedTab && data.workspaceState.activeTopView) {
-              setActiveTopView(data.workspaceState.activeTopView as any);
-            }
+            try {
+              if (!localStorage.getItem('tidyups_active_tab')) {
+                localStorage.setItem('tidyups_active_tab', activeTopView);
+              }
+            } catch {}
           }
         }
       })
       .catch((err) => console.warn('Could not load persistent store:', err));
+
+    // Background delta refresh every 30s so customer submissions on app.tidyupscleaning.com/booking or webhooks appear automatically
+    const pollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetch(`/api/store?project=${activeProjectId}`, {
+        headers: { 'x-project-id': activeProjectId },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!data) return;
+          if (Array.isArray(data.adLeads)) {
+            setLeadsList(filterValidRecentLeads(data.adLeads));
+          }
+          if (Array.isArray(data.quotes) && data.quotes.length > 0) {
+            setQuotesList((prev) => dedupeQuotesList([...data.quotes, ...prev]));
+          }
+          if (Array.isArray(data.clients) && data.clients.length > 0) {
+            setClientsList(data.clients);
+          }
+          if (Array.isArray(data.unscheduledJobs)) {
+            setUnscheduledJobsList(data.unscheduledJobs.filter((j: any) => !isFakeSimulationItem(j)));
+          }
+        })
+        .catch(() => {});
+    }, 30000);
+
+    return () => clearInterval(pollTimer);
   }, [activeProjectId]);
 
   // Persist exact workspace position (active tab, Master Hub block, Schedule sub-tab, Map date) so reloading ALWAYS resumes right where you left off
@@ -2324,7 +2450,13 @@ export function App() {
 
     window.addEventListener('google-maps-auth-failure', handleAuthFailure);
     window.addEventListener('google-maps-referer-error', handleRefererError);
-    (window as any).gm_authFailure = handleAuthFailure;
+    (window as any).gm_authFailure = () => {
+      (window as any).__GOOGLE_MAPS_AUTH_FAILED__ = true;
+      handleAuthFailure();
+    };
+    if ((window as any).__GOOGLE_MAPS_AUTH_FAILED__) {
+      setMapsAuthError(true);
+    }
 
     return () => {
       window.removeEventListener('google-maps-auth-failure', handleAuthFailure);
@@ -3538,7 +3670,6 @@ export function App() {
               setMasterHubFocusBlock('MASTER_TABLE');
               setActiveTopView('MASTER_HUB');
             }}
-            onNavigateToQuotes={() => setActiveTopView('QUOTES')}
           />
         ) : activeTopView === 'INTAKES' ? (
           <IntakesView
@@ -3967,6 +4098,9 @@ export function App() {
                   onClick={() => {
                     setActiveLegalTab('SUPPORT');
                     setActiveTopView('LEGAL');
+                    try {
+                      window.history.pushState({}, '', '/support');
+                    } catch {}
                   }}
                   className="hover:text-white cursor-pointer"
                 >
@@ -3975,8 +4109,24 @@ export function App() {
                 <span>•</span>
                 <button
                   onClick={() => {
+                    setActiveLegalTab('CONTACT');
+                    setActiveTopView('LEGAL');
+                    try {
+                      window.history.pushState({}, '', '/contact');
+                    } catch {}
+                  }}
+                  className="hover:text-white cursor-pointer"
+                >
+                  /contact
+                </button>
+                <span>•</span>
+                <button
+                  onClick={() => {
                     setActiveLegalTab('TERMS');
                     setActiveTopView('LEGAL');
+                    try {
+                      window.history.pushState({}, '', '/T&C');
+                    } catch {}
                   }}
                   className="hover:text-white cursor-pointer"
                 >
@@ -3987,6 +4137,9 @@ export function App() {
                   onClick={() => {
                     setActiveLegalTab('PRIVACY');
                     setActiveTopView('LEGAL');
+                    try {
+                      window.history.pushState({}, '', '/privacy');
+                    } catch {}
                   }}
                   className="hover:text-white cursor-pointer"
                 >
@@ -4376,6 +4529,7 @@ export function App() {
         {/* Jobber Backend Integration & Sync Hub Modal */}
         <JobberSyncModal
           isOpen={isJobberModalOpen}
+          initialTab={jobberModalInitialTab}
           onClose={() => {
             setIsJobberModalOpen(false);
             fetch(`/api/store?project=${activeProjectId}`, { headers: { 'x-project-id': activeProjectId } })
@@ -4476,8 +4630,15 @@ export function App() {
             setScheduledJobsList((prev) => [newVisit, ...prev]);
           }}
           onCreateJobberQuote={(newQuote, fullResponse) => {
-            setQuotesList((prev) => dedupeQuotesList([newQuote, ...prev]));
-            if (fullResponse?.client) {
+            if (Array.isArray(fullResponse?.quotes) && fullResponse.quotes.length > 0) {
+              setQuotesList(dedupeQuotesList(fullResponse.quotes));
+            } else {
+              setQuotesList((prev) => dedupeQuotesList([newQuote, ...prev]));
+            }
+            saveQuoteToFirestore(newQuote).catch(() => {});
+            if (Array.isArray(fullResponse?.clients) && fullResponse.clients.length > 0) {
+              setClientsList(fullResponse.clients);
+            } else if (fullResponse?.client) {
               setClientsList((prev) => {
                 const exists = prev.some((c) => c.id === fullResponse.client.id);
                 return exists
@@ -4485,8 +4646,21 @@ export function App() {
                   : [fullResponse.client, ...prev];
               });
             }
+            if (fullResponse?.client) {
+              saveClientToFirestore(fullResponse.client).catch(() => {});
+            }
+            if (Array.isArray(fullResponse?.leads) && fullResponse.leads.length > 0) {
+              setLeadsList(fullResponse.leads);
+            } else if (fullResponse?.lead) {
+              setLeadsList((prev) => {
+                const exists = prev.some((l) => l.id === fullResponse.lead.id);
+                return exists
+                  ? prev.map((l) => (l.id === fullResponse.lead.id ? fullResponse.lead : l))
+                  : [fullResponse.lead, ...prev];
+              });
+            }
             if (fullResponse?.lead) {
-              setLeadsList((prev) => prev.map((l) => (l.id === fullResponse.lead.id ? fullResponse.lead : l)));
+              saveLeadToFirestore(fullResponse.lead).catch(() => {});
             }
             setIsQuickQuoteModalOpen(false);
             setActiveQuoteDetailModalItem(newQuote);
@@ -4503,9 +4677,32 @@ export function App() {
           onClose={() => setActiveQuoteDetailModalItem(null)}
           quote={activeQuoteDetailModalItem}
           projectId={activeProjectId}
-          onQuoteUpdated={(updatedQuote) => {
+          onQuoteUpdated={(updatedQuote, allQuotes, fullResponse) => {
             setActiveQuoteDetailModalItem(updatedQuote);
-            setQuotesList((prev) => dedupeQuotesList(prev.map((q) => (q.id === updatedQuote.id ? updatedQuote : q))));
+            if (Array.isArray(allQuotes) && allQuotes.length > 0) {
+              setQuotesList(dedupeQuotesList(allQuotes));
+            } else {
+              setQuotesList((prev) =>
+                dedupeQuotesList([
+                  updatedQuote,
+                  ...prev.filter((q) => q.id !== updatedQuote.id && q.quoteNumber !== updatedQuote.quoteNumber),
+                ])
+              );
+            }
+            if (Array.isArray(fullResponse?.scheduledVisits) && fullResponse.scheduledVisits.length > 0) {
+              setScheduledJobsList(fullResponse.scheduledVisits);
+            } else if (fullResponse?.newVisit) {
+              setScheduledJobsList((prev) => [
+                fullResponse.newVisit,
+                ...prev.filter((v) => v.id !== fullResponse.newVisit.id && v.quoteNumber !== updatedQuote.quoteNumber),
+              ]);
+            }
+            if (Array.isArray(fullResponse?.leads) && fullResponse.leads.length > 0) {
+              setLeadsList(fullResponse.leads);
+            }
+            if (Array.isArray(fullResponse?.clients) && fullResponse.clients.length > 0) {
+              setClientsList(fullResponse.clients);
+            }
           }}
         />
 
@@ -4663,8 +4860,8 @@ export function App() {
         {/* Global Cookie Consent Banner (Google Ads Consent Mode v2 for AW-18533917803) */}
         <CookieConsentBanner
           onOpenPrivacyPolicy={() => {
-            setActiveLegalPage('PRIVACY_POLICY');
-            setActiveTopView('LEGAL_PAGES');
+            setActiveLegalTab('PRIVACY');
+            setActiveTopView('LEGAL');
           }}
         />
       </div>

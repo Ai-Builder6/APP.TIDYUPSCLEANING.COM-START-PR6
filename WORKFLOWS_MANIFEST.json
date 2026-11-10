@@ -1,0 +1,43 @@
+{
+  "projectName": "TidyUps Cleaning Service Inc — PR16 Archive",
+  "prLabel": "PR16",
+  "prNumber": 16,
+  "githubRepo": "Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16",
+  "zipFilename": "app.tidyups.cleaning-PR16-2026-11-09-Afternoon.zip",
+  "domain": "app.tidyups.cleaning",
+  "productionDomain": "app.tidyupscleaning.com",
+  "bookingUrl": "https://app.tidyupscleaning.com/booking",
+  "supportUrl": "https://app.tidyupscleaning.com/support",
+  "contactUrl": "https://app.tidyupscleaning.com/contact",
+  "termsUrl": "https://app.tidyupscleaning.com/T&C",
+  "privacyUrl": "https://app.tidyupscleaning.com/privacy",
+  "googleDriveBackupFolder": "TidyUps Cleaning App Backup Zips",
+  "oneClickLaunchers": {
+    "windows": "CLICK_TO_BUILD_AND_RUN_WINDOWS.bat",
+    "macAndLinux": "CLICK_TO_BUILD_AND_RUN_MAC.command",
+    "npmCommand": "npm run oneclick",
+    "quickStartGuide": "START_HERE_1_CLICK_BUILD.txt"
+  },
+  "includedBots": [
+    "Jobber CRM OAuth 2.0, GraphQL 2-Way Sync, Developer Info Kit & Webhook Bot (/api/jobber/*, /api/webhooks/jobber)",
+    "Facebook Messenger 24/7 AI Sales, Quote & Lead Intake Bot (/api/facebook/*)",
+    "Continuous Voice Dictation & Gemini AI Phone Quote Bot (/api/dispatch/parse-voice-ticket)",
+    "Quo (OpenPhone) 6-Line Call Transcript & Sonia AI Lead Engine Bot (/api/quo/*)",
+    "Twilio Bam Shield / Spam Shield & Live Incoming Call Screener Bot (/api/twilio/voice, /api/twilio/live-calls)",
+    "9-Tab Visual Clean Google Sheets & Meta/Google Ads Webhook Bot (/api/leads/*)"
+  ],
+  "includedWorkflows": [
+    "START_HERE_1_CLICK_BUILD.txt",
+    "CLICK_TO_BUILD_AND_RUN_WINDOWS.bat",
+    "CLICK_TO_BUILD_AND_RUN_MAC.command",
+    "README.md",
+    "AI_BUILD_WORKFLOW.md",
+    "workflows/COMPLETE_APP_WORKFLOWS.md",
+    ".env.example",
+    ".github/workflows/deploy-and-backup.yml",
+    "cloudbuild.yaml",
+    "Dockerfile"
+  ],
+  "totalFilesPackaged": 125,
+  "exportedAt": "2026-11-09T23:50:00.000Z"
+}

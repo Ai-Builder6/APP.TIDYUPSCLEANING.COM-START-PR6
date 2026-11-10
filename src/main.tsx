@@ -3,12 +3,28 @@ import { createRoot } from 'react-dom/client';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import App from './App.tsx';
 import { CustomerPortalView } from './components/CustomerPortalView';
+import { ThankYouConversionPage } from './components/ThankYouConversionPage';
 import {
   saveClientToFirestore,
   saveQuoteToFirestore,
   saveScheduledVisitToFirestore,
 } from './services/firestoreSyncService';
 import './index.css';
+
+function isDedicatedThankYouRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const path = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
+  const search = (window.location.search || '').toLowerCase();
+  return (
+    Boolean((window as any).__FORCE_THANK_YOU_PAGE__) ||
+    path === '/thank-you' ||
+    path === '/thankyou' ||
+    path.startsWith('/thank-you/') ||
+    path === '/booking/thank-you' ||
+    path === '/book/thank-you' ||
+    search.includes('page=thank-you')
+  );
+}
 
 function isDedicatedCustomerBookingRoute(): boolean {
   if (typeof window === 'undefined') return false;
@@ -26,7 +42,9 @@ function isDedicatedCustomerBookingRoute(): boolean {
     search.includes('mode=customer') ||
     search.includes('booking=1') ||
     host.startsWith('book.') ||
-    host.includes('book.tidyupscleaning')
+    host.includes('book.tidyupscleaning') ||
+    host.startsWith('ads.') ||
+    host.includes('ads.tidyupscleaning')
   ) {
     return true;
   }
@@ -34,8 +52,17 @@ function isDedicatedCustomerBookingRoute(): boolean {
 }
 
 const StandaloneCustomerBookingPage: React.FC = () => {
-  const apiKey =
-    import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyC4kxdVgVTNm5ppd8IuK7rqq-Rz_EV31Ns';
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+  if (isDedicatedThankYouRoute()) {
+    return (
+      <ThankYouConversionPage
+        onBookAnother={() => {
+          (window as any).__FORCE_THANK_YOU_PAGE__ = false;
+          window.location.href = '/booking';
+        }}
+      />
+    );
+  }
   return (
     <APIProvider
       apiKey={apiKey}
@@ -88,20 +115,35 @@ class RootErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
-          <div className="max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
-            <h2 className="text-lg font-extrabold text-white mb-2">Refreshing Application View</h2>
-            <p className="text-xs text-slate-300 mb-4">
-              Click below to reload the page while keeping all your saved settings and approvals intact.
-            </p>
-            <button
-              onClick={() => {
-                this.setState({ hasError: false, retried: false });
-                window.location.reload();
-              }}
-              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs cursor-pointer shadow-lg"
-            >
-              Reload Page Now
-            </button>
+          <div className="max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <h2 className="text-lg font-extrabold text-white">Application View Recovery</h2>
+            {this.state.errorMsg && (
+              <p className="text-xs font-mono text-amber-300 bg-slate-950/80 border border-slate-800 rounded-lg p-2.5 break-words">
+                {this.state.errorMsg}
+              </p>
+            )}
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={() => {
+                  try {
+                    localStorage.setItem('tidyups_active_tab', 'LEADS');
+                  } catch {}
+                  this.setState({ hasError: false, errorMsg: '', retried: false });
+                }}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs cursor-pointer shadow-lg"
+              >
+                Continue to Console
+              </button>
+              <button
+                onClick={() => {
+                  this.setState({ hasError: false, errorMsg: '', retried: false });
+                  window.location.reload();
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs cursor-pointer"
+              >
+                Reload Page
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -110,10 +152,10 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-// Early interceptor for Google Maps JavaScript API authentication & target blocked errors, plus quota and referrer limits
+// Early interceptor for Google Maps JavaScript API authentication, billing, quota & referrer limits
 if (typeof window !== 'undefined') {
   (window as any).gm_authFailure = () => {
-    console.warn('Google Maps API Auth Notice (gm_authFailure). Enabling interactive fallback territory map.');
+    (window as any).__GOOGLE_MAPS_AUTH_FAILED__ = true;
     window.dispatchEvent(new CustomEvent('google-maps-auth-failure'));
   };
 
@@ -136,17 +178,19 @@ if (typeof window !== 'undefined') {
       msg.includes('RefererNotAllowedMapError') ||
       msg.includes('ApiTargetBlockedMapError') ||
       msg.includes('ApiProjectMapError') ||
-      msg.includes('InvalidKeyMapError')
+      msg.includes('InvalidKeyMapError') ||
+      msg.includes('BillingNotEnabledMapError') ||
+      msg.includes('OverQuotaMapError') ||
+      msg.includes('QuotaExceededError') ||
+      msg.includes('API_KEY_HTTP_REFERRER_BLOCKED') ||
+      msg.includes('requests-from-referer')
     ) {
+      (window as any).__GOOGLE_MAPS_AUTH_FAILED__ = true;
       window.dispatchEvent(new CustomEvent('google-maps-auth-failure'));
       return;
     }
 
     if (
-      msg.includes('OverQuotaMapError') ||
-      msg.includes('QuotaExceededError') ||
-      msg.includes('API_KEY_HTTP_REFERRER_BLOCKED') ||
-      msg.includes('requests-from-referer') ||
       msg.includes('auth/unauthorized-domain') ||
       msg.includes('type.googleapis.com/google.rpc.ErrorInfo') ||
       msg.includes('ErrorInfo')
@@ -203,24 +247,20 @@ if (typeof window !== 'undefined') {
       }
     }
   });
-  // Automatically check for and apply new PWA updates whenever the downloaded app is opened or focused
-  if ('serviceWorker' in navigator) {
-    const checkForPwaUpdate = () => {
-      navigator.serviceWorker
-        .getRegistrations()
-        .then((regs) => {
-          for (const reg of regs) {
-            reg.update().catch(() => {});
+  // Only unregister legacy dev-sw.js or workbox service workers, NEVER AI Studio's proxy service worker on .run.app
+  if ('serviceWorker' in navigator && !window.location.hostname.endsWith('.run.app')) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => {
+        for (const reg of regs) {
+          const scriptUrl =
+            reg.active?.scriptURL || reg.waiting?.scriptURL || reg.installing?.scriptURL || '';
+          if (scriptUrl.includes('dev-sw.js') || scriptUrl.includes('workbox')) {
+            reg.unregister().catch(() => {});
           }
-        })
-        .catch(() => {});
-    };
-    window.addEventListener('focus', checkForPwaUpdate);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        checkForPwaUpdate();
-      }
-    });
+        }
+      })
+      .catch(() => {});
   }
 }
 

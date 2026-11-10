@@ -31,6 +31,7 @@ import {
   X,
   Volume2,
   Calculator,
+  RotateCcw,
 } from 'lucide-react';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { ServiceTicket } from '../types/dispatch';
@@ -41,6 +42,7 @@ import {
 } from '../data/serviceCatalogData';
 import { PublicBookingModal } from './PublicBookingModal';
 import { TidyUpsBunnyLogo } from './TidyUpsBunnyLogo';
+import { ThankYouConversionPage } from './ThankYouConversionPage';
 
 export interface CustomerBookingSubmissionPayload {
   ticket: ServiceTicket;
@@ -72,6 +74,7 @@ interface ServiceDetail {
   id: CleaningCategory;
   name: string;
   shortName: string;
+  colorTag: string;
   badge: string;
   ruleSummary: string;
   tagline: string;
@@ -80,6 +83,12 @@ interface ServiceDetail {
   duration: string;
   icon: any;
   accentGradient: string;
+  topBarClass: string;
+  unselectedCardClass: string;
+  selectedCardClass: string;
+  badgeClass: string;
+  selectedPricePillClass: string;
+  checkIconClass: string;
   checklist: string[];
 }
 
@@ -124,6 +133,7 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     id: 'move-out',
     name: 'Move-Out Cleaning',
     shortName: 'Move-Out Cleaning',
+    colorTag: '🔵 Blue Tier • Vacant Turnover',
     badge: 'Min 3 Hrs (2 Cleaners) or 6 Hrs (1 Cleaner)',
     ruleSummary: '2 Cleaners: Min 3 hrs ($105/hr = $315+) • 1 Cleaner: Starts at 6 hrs ($52.50/hr = $315+)',
     tagline: 'Inspection-ready turnkey reset for tenants, landlords, home buyers, and realtors.',
@@ -131,7 +141,15 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     recommendedFor: 'Lease-end inspections, home sales, possession day move-ins',
     duration: 'Min 3 hrs (2 Cleaners) / 6 hrs (1 Cleaner)',
     icon: Key,
-    accentGradient: 'from-pink-600 via-red-600 to-rose-600',
+    accentGradient: 'from-[#1877F2] via-blue-600 to-indigo-600',
+    topBarClass: 'bg-gradient-to-r from-sky-400 via-[#1877F2] to-indigo-500',
+    unselectedCardClass:
+      'bg-gradient-to-b from-blue-950/45 via-slate-900/95 to-slate-950 border-blue-500/45 hover:border-sky-400 hover:shadow-[0_0_22px_rgba(24,119,242,0.3)]',
+    selectedCardClass:
+      'bg-gradient-to-b from-[#1877F2]/35 via-blue-950/90 to-slate-950 border-sky-400 ring-2 ring-sky-400/50 shadow-[0_0_30px_rgba(24,119,242,0.5)] scale-[1.02]',
+    badgeClass: 'bg-[#1877F2]/25 border border-sky-400/50 text-sky-200',
+    selectedPricePillClass: 'bg-gradient-to-r from-[#1877F2] to-indigo-600 text-white',
+    checkIconClass: 'text-sky-400',
     checklist: [
       'Full interior oven degrease & rack scrubbing',
       'Interior & exterior refrigerator and freezer sanitization',
@@ -147,6 +165,7 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     id: 'standard',
     name: 'Basic Cleaning',
     shortName: 'Basic Cleaning',
+    colorTag: '🟢 Emerald Tier • Standard Upkeep',
     badge: '1 Pro Cleaner Only ($52.50/hr)',
     ruleSummary: '1 Dedicated Cleaner ($52.50/hr) • Standard Residential Maintenance',
     tagline: 'Bright, spotless upkeep with 1 dedicated cleaner that keeps your home fresh and sanitized.',
@@ -154,7 +173,15 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     recommendedFor: 'Busy families, professionals & regular residential maintenance care',
     duration: '1 Cleaner @ $52.50/hr',
     icon: Brush,
-    accentGradient: 'from-red-600 via-pink-600 to-fuchsia-600',
+    accentGradient: 'from-[#0F9D58] via-emerald-600 to-teal-600',
+    topBarClass: 'bg-gradient-to-r from-emerald-400 via-[#0F9D58] to-teal-500',
+    unselectedCardClass:
+      'bg-gradient-to-b from-emerald-950/45 via-slate-900/95 to-slate-950 border-emerald-500/45 hover:border-emerald-400 hover:shadow-[0_0_22px_rgba(15,157,88,0.3)]',
+    selectedCardClass:
+      'bg-gradient-to-b from-[#0F9D58]/35 via-emerald-950/90 to-slate-950 border-emerald-400 ring-2 ring-emerald-400/50 shadow-[0_0_30px_rgba(15,157,88,0.5)] scale-[1.02]',
+    badgeClass: 'bg-[#0F9D58]/25 border border-emerald-400/50 text-emerald-200',
+    selectedPricePillClass: 'bg-gradient-to-r from-[#0F9D58] to-teal-600 text-white',
+    checkIconClass: 'text-emerald-400',
     checklist: [
       'Dusting all furniture, ledges, frames & decor',
       'Kitchen countertops, sink, backsplash & exterior appliances wiped',
@@ -170,6 +197,7 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     id: 'deep',
     name: 'Deep Cleaning',
     shortName: 'Deep Cleaning',
+    colorTag: '🟣 Purple Tier • Heavy Detail Scrub',
     badge: 'Min 2 Cleaners for 2 Hrs ($105/hr)',
     ruleSummary: 'Minimum 2 Cleaners for 2+ Hours ($105/hr = $210.00+)',
     tagline: 'Intensive 2-cleaner top-to-bottom scrub targeting built-up grime, soap scale, and corners.',
@@ -177,7 +205,15 @@ const CLEANING_SERVICES: ServiceDetail[] = [
     recommendedFor: 'Spring/Fall refresh, first-time cleans, homes needing extra detail',
     duration: 'Min 2 Cleaners for 2+ Hours',
     icon: Sparkles,
-    accentGradient: 'from-pink-500 via-red-600 to-purple-600',
+    accentGradient: 'from-[#7C3AED] via-purple-600 to-fuchsia-600',
+    topBarClass: 'bg-gradient-to-r from-violet-400 via-[#7C3AED] to-fuchsia-500',
+    unselectedCardClass:
+      'bg-gradient-to-b from-purple-950/45 via-slate-900/95 to-slate-950 border-purple-500/45 hover:border-purple-400 hover:shadow-[0_0_22px_rgba(124,58,237,0.3)]',
+    selectedCardClass:
+      'bg-gradient-to-b from-[#7C3AED]/35 via-purple-950/90 to-slate-950 border-purple-400 ring-2 ring-purple-400/50 shadow-[0_0_30px_rgba(124,58,237,0.5)] scale-[1.02]',
+    badgeClass: 'bg-[#7C3AED]/25 border border-purple-400/50 text-purple-200',
+    selectedPricePillClass: 'bg-gradient-to-r from-[#7C3AED] to-fuchsia-600 text-white',
+    checkIconClass: 'text-purple-400',
     checklist: [
       'Heavy soap scum, hard water & limescale removal in bathrooms',
       'Hand-wiping baseboards, door frames, window sills & wainscoting',
@@ -333,30 +369,26 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
     }
   };
 
-  const [selectedService, setSelectedService] = useState<CleaningCategory>('move-out');
+  const [selectedService, setSelectedService] = useState<CleaningCategory | ''>('');
   const [activeBannerIdx, setActiveBannerIdx] = useState<number>(0);
 
-  // Split Customer Name: First Name + Last Name
+  // Split Customer Name: First Name + Last Name — all fields start 100% blank on open
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [address, setAddress] = useState('');
-  const [city, setCity] = useState('Edmonton');
+  const [city, setCity] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [bedrooms, setBedrooms] = useState('3 Bedrooms');
-  const [bathrooms, setBathrooms] = useState('2 Bathrooms');
+  const [bedrooms, setBedrooms] = useState('');
+  const [bathrooms, setBathrooms] = useState('');
   const [cleanerCount, setCleanerCount] = useState<1 | 2>(2);
   const [frequency, setFrequency] = useState<
     'One-Time' | 'Weekly (15% Off)' | 'Bi-Weekly (10% Off)' | 'Monthly (5% Off)'
   >('One-Time');
   const [selectedAddons, setSelectedAddons] = useState<string[]>([]);
-  const [preferredDate, setPreferredDate] = useState<string>(() => {
-    const tmrw = new Date();
-    tmrw.setDate(tmrw.getDate() + 1);
-    return tmrw.toISOString().slice(0, 10);
-  });
-  const [preferredTime, setPreferredTime] = useState('Morning (8:00 AM - 12:00 PM)');
+  const [preferredDate, setPreferredDate] = useState<string>('');
+  const [preferredTime, setPreferredTime] = useState('');
   const [heardAbout, setHeardAbout] = useState<string>(initialSourceFromUrl);
   const [specialInstructions, setSpecialInstructions] = useState('');
 
@@ -365,7 +397,19 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   const [calendarMonthDate, setCalendarMonthDate] = useState<Date>(() => new Date());
 
   // Submission & Feedback State
-  const [formSubmitted, setFormSubmitted] = useState<boolean>(false);
+  const [formSubmitted, setFormSubmitted] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const p = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+    const s = window.location.search.toLowerCase();
+    return (
+      p === '/thank-you' ||
+      p === '/thankyou' ||
+      p === '/booking/thank-you' ||
+      p === '/book/thank-you' ||
+      s.includes('page=thank-you')
+    );
+  });
+  const [previewThankYouPage, setPreviewThankYouPage] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [confirmedBookingId, setConfirmedBookingId] = useState<string>('');
   const [confirmedQuoteNumber, setConfirmedQuoteNumber] = useState<string>('');
@@ -982,12 +1026,12 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   const getLitBoxClass = (fieldKey: HighlightFieldKey, isFilled: boolean) => {
     const isFlashing = Boolean(flashingFields[fieldKey]);
     if (isFlashing) {
-      return 'border-pink-400 bg-gradient-to-br from-pink-950/90 via-red-950/80 to-black ring-4 ring-pink-500/50 shadow-[0_0_25px_rgba(236,72,153,0.65)] scale-[1.01] transition-all duration-300';
+      return 'border-sky-400 bg-gradient-to-br from-sky-950/90 via-indigo-950/80 to-slate-950 ring-4 ring-sky-500/50 shadow-[0_0_25px_rgba(56,189,248,0.65)] scale-[1.01] transition-all duration-300';
     }
     if (isFilled) {
-      return 'border-emerald-400/90 bg-gradient-to-br from-emerald-950/55 via-zinc-900 to-black ring-2 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all duration-300';
+      return 'border-emerald-400/90 bg-gradient-to-br from-emerald-950/55 via-slate-900 to-slate-950 ring-2 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all duration-300';
     }
-    return 'border-zinc-800 bg-zinc-900/90 hover:border-pink-500/60 transition-all duration-300';
+    return 'border-slate-700/80 bg-slate-900/90 hover:border-sky-400/60 transition-all duration-300';
   };
 
   const renderLitBadge = (fieldKey: HighlightFieldKey, isFilled: boolean, required = false) => {
@@ -997,7 +1041,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
         <span
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shadow-xs ${
             wasVoice
-              ? 'bg-gradient-to-r from-pink-500 to-red-500 text-white animate-pulse'
+              ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white animate-pulse'
               : 'bg-emerald-500/20 border border-emerald-400 text-emerald-300'
           }`}
         >
@@ -1007,11 +1051,11 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       );
     }
     return required ? (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-red-950/90 border border-red-500/50 text-red-300 text-[10px] font-black uppercase">
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/50 text-amber-200 text-[10px] font-black uppercase">
         Required *
       </span>
     ) : (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-[10px] font-bold">
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-bold">
         Optional
       </span>
     );
@@ -1033,19 +1077,55 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   const filledRequiredCount = requiredBoxesStatus.filter((b) => b.filled).length;
   const fullNameCombined = `${firstName.trim()} ${lastName.trim()}`.trim();
 
+  const handleClearSheet = useCallback(() => {
+    shouldKeepRecordingRef.current = false;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setIsRecordingFormVoice(false);
+    latestTranscriptRef.current = '';
+    latestInterimRef.current = '';
+    setDictationText('');
+    setInterimDictation('');
+    setSelectedService('');
+    setFirstName('');
+    setLastName('');
+    setCustomerPhone('');
+    setCustomerEmail('');
+    setAddress('');
+    setCity('');
+    setPostalCode('');
+    setBedrooms('');
+    setBathrooms('');
+    setCleanerCount(2);
+    setFrequency('One-Time');
+    setSelectedAddons([]);
+    setPreferredDate('');
+    setPreferredTime('');
+    setSpecialInstructions('');
+    setFlashingFields({});
+    setVoiceCapturedFields({});
+    setErrorMessage(null);
+    setVoiceFillStatus('✓ Sheet cleared! All boxes reset to blank — ready to start fresh.');
+    setTimeout(() => setVoiceFillStatus(null), 4000);
+  }, []);
+
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firstName.trim() || !lastName.trim() || !customerPhone.trim() || !address.trim()) {
-      setErrorMessage('Please enter your First Name, Last Name, Mobile Phone Number, and Street Address so all required boxes light up.');
+    if (!selectedService || !firstName.trim() || !lastName.trim() || !customerPhone.trim() || !address.trim() || !bedrooms || !bathrooms || !preferredDate) {
+      setErrorMessage('Please select your Cleaning Service Type, First Name, Last Name, Mobile Phone Number, Street Address, Bedrooms, Bathrooms, and Preferred Date so all 8 required boxes light up.');
       return;
     }
 
     setIsSubmitting(true);
     setErrorMessage(null);
 
-    const fullAddress = address.toLowerCase().includes(city.toLowerCase())
+    const effectiveCity = city || 'Edmonton';
+    const fullAddress = address.toLowerCase().includes(effectiveCity.toLowerCase())
       ? address.trim()
-      : `${address.trim()}, ${city}, AB ${postalCode.trim()}`.trim();
+      : `${address.trim()}, ${effectiveCity}, AB ${postalCode.trim()}`.trim();
 
     try {
       const res = await fetch('/api/public/book', {
@@ -1160,6 +1240,46 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
 
   const showStaffPreviewBanner = !isStandaloneCustomerSite && Boolean(onToggleCustomerLockPreview);
 
+  if (formSubmitted || previewThankYouPage) {
+    return (
+      <div className="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-slate-950">
+        <ThankYouConversionPage
+          isOwnerPreview={previewThankYouPage || showStaffPreviewBanner}
+          bookingReceipt={
+            firstName || customerPhone
+              ? {
+                  customerName: fullNameCombined,
+                  firstName: firstName.trim(),
+                  lastName: lastName.trim(),
+                  customerPhone: customerPhone.trim(),
+                  customerEmail: customerEmail.trim(),
+                  serviceType: activeServiceData.name,
+                  packageName: priceCalculation.matchedItemName,
+                  hoursLabel: priceCalculation.hoursLabel,
+                  address: address.trim(),
+                  city,
+                  bedrooms,
+                  bathrooms,
+                  preferredDateLabel: formattedPreferredDateLabel,
+                  preferredTime,
+                  totalAmount: priceCalculation.total,
+                  bookingId: confirmedBookingId,
+                  quoteNumber: confirmedQuoteNumber
+                }
+              : undefined
+          }
+          onBookAnother={() => {
+            setFormSubmitted(false);
+            setPreviewThankYouPage(false);
+            try {
+              window.history.pushState({}, '', '/booking');
+            } catch {}
+          }}
+        />
+      </div>
+    );
+  }
+
   if (bookingRouteVariant === 'SIMPLE_3_OPTION') {
     return (
       <div className="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-black">
@@ -1168,6 +1288,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           mode="STANDALONE_PAGE"
           isOwnerViewing={showStaffPreviewBanner && !isCustomerLockPreview}
           onSwitchToCalculatorMode={() => handleSwitchRouteVariant('CALCULATOR')}
+          onPreviewThankYouPage={() => setPreviewThankYouPage(true)}
           onOpenStaffLogin={onOpenStaffLogin}
           onBookingCreated={(ticket, fullData) => {
             if (onBookingSubmitted && ticket) {
@@ -1187,21 +1308,21 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
   }
 
   return (
-    <div className="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-black font-sans text-white">
+    <div className="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-gradient-to-br from-slate-950 via-[#091224] to-indigo-950 font-sans text-white">
       {/* ─────────────────────────────────────────────────────────────────────────────
           OWNER & JESS CONTROL BAR (NEVER SHOWN TO CUSTOMERS ON app.tidyupscleaning.com/booking)
          ───────────────────────────────────────────────────────────────────────────── */}
       {showStaffPreviewBanner && !isCustomerLockPreview && (
-        <div className="bg-zinc-950 text-white px-4 py-3 border-b-2 border-pink-500 shadow-lg">
+        <div className="bg-slate-950 text-white px-4 py-3 border-b-2 border-sky-500 shadow-lg">
           <div className="max-w-7xl mx-auto flex flex-col xl:flex-row xl:items-center justify-between gap-3">
             <div className="flex items-start sm:items-center gap-3 flex-wrap">
-              <span className="px-2.5 py-1 rounded-full bg-gradient-to-r from-pink-500 to-red-600 text-white text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
+              <span className="px-2.5 py-1 rounded-full bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] text-white text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xs">
                 <Lock className="w-3.5 h-3.5" />
                 <span>Official Customer Booking Page (/booking)</span>
               </span>
-              <div className="text-xs text-zinc-200">
-                <strong className="text-pink-400">Official Booking Link (for Jess&apos;s FB &amp; Google Ads + tidyupscleaning.com/booking):</strong>{' '}
-                <code className="px-1.5 py-0.5 rounded bg-zinc-900 border border-pink-500/40 text-pink-300 font-mono font-bold">
+              <div className="text-xs text-slate-200">
+                <strong className="text-sky-400">Official Booking Link (for Jess&apos;s FB &amp; Google Ads + tidyupscleaning.com/booking):</strong>{' '}
+                <code className="px-1.5 py-0.5 rounded bg-slate-900 border border-sky-500/40 text-sky-300 font-mono font-bold">
                   https://app.tidyupscleaning.com/booking
                 </code>
               </div>
@@ -1211,7 +1332,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleSwitchRouteVariant('SIMPLE_3_OPTION')}
-                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-pink-600 to-red-600 hover:from-pink-500 hover:to-red-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#1877F2] to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
                 title="Switch to the Simple 3-Option Booking Form (/booking: Move-Out, Basic, Deep)"
               >
                 <Sparkles className="w-3.5 h-3.5" />
@@ -1221,7 +1342,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleCopyBookingLink('booking3', 'https://app.tidyupscleaning.com/booking')}
-                className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-pink-500 text-pink-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500 text-sky-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
               >
                 {copiedLinkKey === 'booking3' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedLinkKey === 'booking3' ? 'Copied /booking!' : 'Copy /booking Link'}</span>
@@ -1231,17 +1352,37 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                 type="button"
                 onClick={() => handleCopyBookingLink('thankyou', 'https://app.tidyupscleaning.com/thank-you')}
                 className="px-3 py-1.5 rounded-xl bg-emerald-950 hover:bg-emerald-900 border border-emerald-400 text-emerald-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
-                title="Copy Google Ads Conversion Page URL (https://app.tidyupscleaning.com/thank-you)"
+                title="Copy Primary Thank-You Page URL (https://app.tidyupscleaning.com/thank-you)"
               >
                 {copiedLinkKey === 'thankyou' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLinkKey === 'thankyou' ? 'Copied /thank-you!' : 'Copy /thank-you Ads Link'}</span>
+                <span>{copiedLinkKey === 'thankyou' ? 'Copied app.../thank-you!' : 'Copy app.../thank-you'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleCopyBookingLink('ads_thankyou', 'https://ads.tidyupscleaning.com/thank-you')}
+                className="px-3 py-1.5 rounded-xl bg-sky-950 hover:bg-sky-900 border border-sky-400 text-sky-300 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                title="Copy Ads Thank-You Page URL (https://ads.tidyupscleaning.com/thank-you)"
+              >
+                {copiedLinkKey === 'ads_thankyou' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLinkKey === 'ads_thankyou' ? 'Copied ads.../thank-you!' : 'Copy ads.../thank-you'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPreviewThankYouPage(true)}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                title="Open & Preview the Dedicated /thank-you Confirmation Page"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Preview /thank-you Page</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleReconnectFacebookAndGoogleLeads}
                 disabled={isReconnectingLeads}
-                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-red-600 to-pink-600 hover:opacity-95 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#0F9D58] to-teal-600 hover:opacity-95 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isReconnectingLeads ? 'animate-spin' : ''}`} />
                 <span>{isReconnectingLeads ? 'Reconnecting...' : '🔄 Sync Leads'}</span>
@@ -1251,7 +1392,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                 <button
                   type="button"
                   onClick={() => onToggleCustomerLockPreview(true)}
-                  className="px-3 py-1.5 rounded-xl bg-pink-500 hover:bg-pink-400 text-black font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
                   <Lock className="w-3.5 h-3.5" />
                   <span>Preview Customer-Only Lock</span>
@@ -1284,33 +1425,35 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           <button
             type="button"
             onClick={() => onToggleCustomerLockPreview(false)}
-            className="px-4 py-2 rounded-2xl bg-zinc-950 hover:bg-zinc-900 text-pink-300 border-2 border-pink-500 text-xs font-black flex items-center gap-2 shadow-2xl cursor-pointer"
+            className="px-4 py-2 rounded-2xl bg-slate-950 hover:bg-slate-900 text-sky-300 border-2 border-sky-500 text-xs font-black flex items-center gap-2 shadow-2xl cursor-pointer"
           >
-            <Unlock className="w-4 h-4 text-pink-400" />
+            <Unlock className="w-4 h-4 text-sky-400" />
             <span>Exit Customer-Only Lock Preview (Return to Staff App)</span>
           </button>
         </div>
       )}
 
       {/* ─────────────────────────────────────────────────────────────────────────────
-          1. DEDICATED STICKY TOP HEADER (BLACK, HOT PINK & BRIGHT RED + TIDYUPS BUNNY)
+          1. DEDICATED STICKY TOP HEADER (MULTI-COLOR MASTER SHEET THEME + TIDYUPS BUNNY)
          ───────────────────────────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 bg-black/95 backdrop-blur-md border-b-2 border-pink-500 shadow-[0_4px_25px_rgba(236,72,153,0.25)] px-4 sm:px-6 lg:px-8 py-3">
+      <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md border-b-2 border-sky-500/70 shadow-[0_4px_25px_rgba(24,119,242,0.2)] px-4 sm:px-6 lg:px-8 py-3">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* TidyUps Bunny Mascot Crest & Brand Name */}
           <div className="flex items-center gap-3.5">
             <TidyUpsBunnyLogo size="md" />
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-lg sm:text-2xl font-black tracking-tight bg-gradient-to-r from-white via-pink-400 to-red-500 bg-clip-text text-transparent">
+                <span className="text-lg sm:text-2xl font-black tracking-tight bg-gradient-to-r from-white via-sky-300 to-emerald-300 bg-clip-text text-transparent">
                   TidyUps Cleaning Service Inc.
                 </span>
-                <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-gradient-to-r from-pink-600 to-red-600 text-white text-[10px] font-black uppercase tracking-wider">
+                <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] text-white text-[10px] font-black uppercase tracking-wider">
                   🐰 Est. 2012 • Edmonton &amp; Area
                 </span>
               </div>
-              <p className="text-[11px] sm:text-xs font-bold text-zinc-400">
-                Move-Out Cleaning • Basic Cleaning • Deep Cleaning • Instant Voice &amp; Online Quotes
+              <p className="text-[11px] sm:text-xs font-bold text-slate-300">
+                <span className="text-sky-400">Move-Out Cleaning</span> •{' '}
+                <span className="text-emerald-400">Basic Cleaning</span> •{' '}
+                <span className="text-purple-400">Deep Cleaning</span> • Instant Voice &amp; Online Quotes
               </p>
             </div>
           </div>
@@ -1321,43 +1464,43 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               href="https://tidyupscleaning.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-pink-500/60 text-pink-300 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/60 text-sky-300 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              <Globe className="w-3.5 h-3.5 text-pink-400" />
+              <Globe className="w-3.5 h-3.5 text-sky-400" />
               <span>tidyupscleaning.com</span>
-              <ExternalLink className="w-3 h-3 text-pink-400" />
+              <ExternalLink className="w-3 h-3 text-sky-400" />
             </a>
 
             <a
               href="mailto:booking@tidyupscleaning.com"
-              className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-red-500/60 text-red-300 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/60 text-emerald-300 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              <Mail className="w-3.5 h-3.5 text-red-400" />
+              <Mail className="w-3.5 h-3.5 text-emerald-400" />
               <span>booking@tidyupscleaning.com</span>
             </a>
 
             <button
               type="button"
               onClick={() => handleOpenLegalModal('PRIVACY')}
-              className="px-2.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
+              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
             >
-              <Lock className="w-3.5 h-3.5 text-pink-500" />
+              <Lock className="w-3.5 h-3.5 text-sky-400" />
               <span>Privacy</span>
             </button>
 
             <button
               type="button"
               onClick={() => handleOpenLegalModal('TERMS')}
-              className="px-2.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
+              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
             >
-              <FileText className="w-3.5 h-3.5 text-red-500" />
+              <FileText className="w-3.5 h-3.5 text-purple-400" />
               <span>T&amp;C</span>
             </button>
 
             <button
               type="button"
               onClick={() => bookingFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 via-red-600 to-pink-600 hover:opacity-95 text-white font-black text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(236,72,153,0.4)] cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] hover:opacity-95 text-white font-black text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(24,119,242,0.4)] cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Book Now ↓</span>
@@ -1367,9 +1510,9 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <button
                 type="button"
                 onClick={onOpenStaffLogin}
-                className="px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-pink-300 border-2 border-pink-500 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-sky-300 border-2 border-sky-500 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
               >
-                <Lock className="w-3.5 h-3.5 text-pink-400" />
+                <Lock className="w-3.5 h-3.5 text-sky-400" />
                 <span>👑 Owner Login</span>
               </button>
             )}
@@ -1378,41 +1521,49 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       </header>
 
       {/* ─────────────────────────────────────────────────────────────────────────────
-          2. BLACK, HOT PINK & BRIGHT RED HERO + TIDYUPS BUNNY FLEET SHOWCASE
+          2. MULTI-COLOR HERO + TIDYUPS BUNNY FLEET SHOWCASE
          ───────────────────────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-gradient-to-r from-black via-zinc-950 to-red-950/60 text-white py-8 sm:py-10 px-4 sm:px-6 lg:px-8 border-b-2 border-pink-500/60 shadow-2xl">
-        <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-pink-600/20 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-red-600/20 blur-3xl pointer-events-none" />
+      <section className="relative overflow-hidden bg-gradient-to-r from-slate-950 via-indigo-950/90 to-slate-900 text-white py-8 sm:py-10 px-4 sm:px-6 lg:px-8 border-b-2 border-sky-500/50 shadow-2xl">
+        <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-blue-600/20 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-purple-600/20 blur-3xl pointer-events-none" />
 
         <div className="relative max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
           {/* Left Hero Copy */}
           <div className="lg:col-span-6 space-y-4 text-center lg:text-left">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-pink-600 to-red-600 text-white text-xs font-black uppercase tracking-wide shadow-md">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] text-white text-xs font-black uppercase tracking-wide shadow-md">
               <Sparkles className="w-4 h-4" />
               <span>🐰 TidyUps Bunny Voice &amp; Instant Quote Portal • app.tidyupscleaning.com/booking</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight leading-tight">
               Speak or Click to Book Your{' '}
-              <span className="bg-gradient-to-r from-pink-400 via-red-400 to-pink-500 bg-clip-text text-transparent underline decoration-red-500 decoration-4 underline-offset-4">
-                Move-Out, Basic, or Deep Clean!
+              <span className="text-sky-400 underline decoration-sky-400 decoration-4 underline-offset-4">
+                Move-Out
+              </span>
+              ,{' '}
+              <span className="text-emerald-400 underline decoration-emerald-400 decoration-4 underline-offset-4">
+                Basic
+              </span>
+              , or{' '}
+              <span className="text-purple-400 underline decoration-purple-400 decoration-4 underline-offset-4">
+                Deep Clean!
               </span>
             </h1>
 
-            <p className="text-zinc-300 text-sm sm:text-base font-medium leading-relaxed max-w-xl mx-auto lg:mx-0">
-              Use our <strong className="text-pink-400">Continuous Voice Dictation</strong> or fill in the boxes below — watch every box <strong className="text-emerald-400">light up</strong> as your First Name, Last Name, Address, Home Size, and Crew are captured!
+            <p className="text-slate-300 text-sm sm:text-base font-medium leading-relaxed max-w-xl mx-auto lg:mx-0">
+              Use our <strong className="text-sky-400">Continuous Voice Dictation</strong> or pick from our 3 color-coded cleaning tiers below — watch every box <strong className="text-emerald-400">light up</strong> as your details are captured!
             </p>
 
-            {/* Crew & Minimum Hours Rule Pills */}
+            {/* Crew & Minimum Hours Rule Pills (Color-Coded to Match the 3 Service Tiers) */}
             <div className="flex flex-wrap items-center justify-center lg:justify-start gap-2 pt-1">
-              <span className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-pink-500/60 text-pink-300 text-xs font-black flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-pink-400" /> Basic: 1 Cleaner ($52.50/hr)
+              <span className="px-3 py-1.5 rounded-xl bg-blue-950/70 border border-sky-400/60 text-sky-200 text-xs font-black flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-sky-400" /> 🔵 Move-Out: 2 Cleaners (3h Min) or 1 Cleaner (6h Min)
               </span>
-              <span className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-red-500/60 text-red-300 text-xs font-black flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-red-400" /> Move-Out: 2 Cleaners (3h Min) or 1 Cleaner (6h Min)
+              <span className="px-3 py-1.5 rounded-xl bg-emerald-950/70 border border-emerald-400/60 text-emerald-200 text-xs font-black flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" /> 🟢 Basic: 1 Cleaner ($52.50/hr)
               </span>
-              <span className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-pink-500/60 text-pink-300 text-xs font-black flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-pink-400" /> Deep Clean: Min 2 Cleaners for 2 Hrs
+              <span className="px-3 py-1.5 rounded-xl bg-purple-950/70 border border-purple-400/60 text-purple-200 text-xs font-black flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-purple-400" /> 🟣 Deep Clean: Min 2 Cleaners for 2 Hrs
               </span>
             </div>
 
@@ -1420,7 +1571,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <button
                 type="button"
                 onClick={() => bookingFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className="px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-500 via-red-600 to-pink-600 hover:opacity-95 text-white font-black text-sm flex items-center gap-2 shadow-[0_0_25px_rgba(236,72,153,0.45)] transition-all active:scale-95 cursor-pointer"
+                className="px-6 py-3 rounded-2xl bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] hover:opacity-95 text-white font-black text-sm flex items-center gap-2 shadow-[0_0_25px_rgba(24,119,242,0.45)] transition-all active:scale-95 cursor-pointer"
               >
                 <Mic className="w-4 h-4" />
                 <span>Start Voice or Online Booking Below</span>
@@ -1429,17 +1580,17 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleSwitchRouteVariant('SIMPLE_3_OPTION')}
-                className="px-4 py-3 rounded-2xl bg-zinc-900 hover:bg-zinc-800 border-2 border-pink-500/60 text-pink-200 font-black text-xs sm:text-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                className="px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 border-2 border-sky-500/60 text-sky-200 font-black text-xs sm:text-sm flex items-center gap-1.5 transition-all cursor-pointer"
               >
-                <span>Open Simple Popup Form (/booking)</span>
+                <span>Open Simple 3-Option Form (/booking)</span>
               </button>
             </div>
           </div>
 
           {/* Right: TidyUps Bunny Fleet & Mascot Banner Showcase */}
           <div className="lg:col-span-6">
-            <div className="bg-zinc-950 p-3 rounded-3xl shadow-[0_0_35px_rgba(236,72,153,0.3)] border-2 border-pink-500 space-y-2.5">
-              <div className="relative rounded-2xl overflow-hidden bg-black aspect-[16/9] border border-zinc-800">
+            <div className="bg-slate-950 p-3 rounded-3xl shadow-[0_0_35px_rgba(24,119,242,0.3)] border-2 border-sky-500/70 space-y-2.5">
+              <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-[16/9] border border-slate-800">
                 <img
                   src={OFFICIAL_COMPANY_BANNERS[activeBannerIdx].src}
                   alt={OFFICIAL_COMPANY_BANNERS[activeBannerIdx].title}
@@ -1452,7 +1603,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                       (prev) => (prev - 1 + OFFICIAL_COMPANY_BANNERS.length) % OFFICIAL_COMPANY_BANNERS.length
                     )
                   }
-                  className="absolute left-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/80 hover:bg-pink-600 text-white border border-pink-500/50 flex items-center justify-center shadow-lg cursor-pointer"
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-slate-950/80 hover:bg-sky-600 text-white border border-sky-500/50 flex items-center justify-center shadow-lg cursor-pointer"
                   aria-label="Previous company banner"
                 >
                   <ChevronLeft className="w-5 h-5" />
@@ -1462,7 +1613,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   onClick={() =>
                     setActiveBannerIdx((prev) => (prev + 1) % OFFICIAL_COMPANY_BANNERS.length)
                   }
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/80 hover:bg-pink-600 text-white border border-pink-500/50 flex items-center justify-center shadow-lg cursor-pointer"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-slate-950/80 hover:bg-sky-600 text-white border border-sky-500/50 flex items-center justify-center shadow-lg cursor-pointer"
                   aria-label="Next company banner"
                 >
                   <ChevronRight className="w-5 h-5" />
@@ -1477,17 +1628,17 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     onClick={() => setActiveBannerIdx(idx)}
                     className={`rounded-xl overflow-hidden border-2 aspect-[16/9] cursor-pointer transition-all ${
                       activeBannerIdx === idx
-                        ? 'border-pink-500 ring-2 ring-red-500 scale-[1.02]'
-                        : 'border-zinc-800 opacity-70 hover:opacity-100'
+                        ? 'border-sky-400 ring-2 ring-indigo-500 scale-[1.02]'
+                        : 'border-slate-800 opacity-70 hover:opacity-100'
                     }`}
                   >
                     <img src={b.src} alt={b.title} className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>
-              <div className="flex items-center justify-between px-1 text-[11px] font-extrabold text-zinc-300">
+              <div className="flex items-center justify-between px-1 text-[11px] font-extrabold text-slate-300">
                 <span className="truncate">{OFFICIAL_COMPANY_BANNERS[activeBannerIdx].title}</span>
-                <a href="/booking" className="text-pink-400 hover:underline font-mono shrink-0 ml-2">app.tidyupscleaning.com/booking</a>
+                <a href="/booking" className="text-sky-400 hover:underline font-mono shrink-0 ml-2">app.tidyupscleaning.com/booking</a>
               </div>
             </div>
           </div>
@@ -1498,21 +1649,23 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           3. VOICE DICTATION & LIT-UP BOXES CUSTOMER BOOKING SHEET + QUOTE CALCULATOR
          ───────────────────────────────────────────────────────────────────────────── */}
       <section ref={bookingFormRef} className="max-w-7xl mx-auto py-8 sm:py-10 px-4 sm:px-6 lg:px-8 space-y-8">
-        {/* Step 1: 3 Cleaning Service Options (Move-Out, Basic, Deep) */}
+        {/* Step 1: 3 Color-Coded Cleaning Service Options (Move-Out = Blue, Basic = Emerald, Deep = Purple) */}
         <div className={`p-5 rounded-3xl border-2 ${getLitBoxClass('selectedService', Boolean(selectedService))}`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
             <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-block px-3 py-1 rounded-full bg-gradient-to-r from-pink-600 to-red-600 text-white text-[11px] font-black uppercase tracking-wider">
-                  Step 1 of 3 • Pick Your Cleaning Service (3 Core Options)
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-block px-3 py-1 rounded-full bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED] text-white text-[11px] font-black uppercase tracking-wider">
+                  Step 1 of 3 • Pick Your Color-Coded Cleaning Tier (3 Core Options)
                 </span>
                 {renderLitBadge('selectedService', Boolean(selectedService), true)}
               </div>
               <h2 className="text-2xl sm:text-3xl font-black text-white mt-1.5">
-                Choose Move-Out, Basic, or Deep Cleaning
+                Choose <span className="text-sky-400">Move-Out</span>,{' '}
+                <span className="text-emerald-400">Basic</span>, or{' '}
+                <span className="text-purple-400">Deep Cleaning</span>
               </h2>
             </div>
-            <span className="text-xs font-extrabold text-pink-300 bg-pink-950/60 border border-pink-500/50 px-3 py-1.5 rounded-xl">
+            <span className="text-xs font-extrabold text-emerald-300 bg-emerald-950/60 border border-emerald-500/50 px-3 py-1.5 rounded-xl">
               ✨ All Supplies, HEPA Vacuums &amp; Eco-Safe Products Included!
             </span>
           </div>
@@ -1529,41 +1682,41 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     setSelectedService(s.id);
                     triggerFieldHighlight('selectedService');
                   }}
-                  className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
-                    isSelected
-                      ? 'bg-gradient-to-b from-pink-950/90 via-red-950/60 to-black border-pink-500 ring-2 ring-pink-500/40 shadow-[0_0_25px_rgba(236,72,153,0.4)] scale-[1.01]'
-                      : 'bg-zinc-950 border-zinc-800 hover:border-pink-500/60'
+                  className={`relative overflow-hidden p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                    isSelected ? s.selectedCardClass : s.unselectedCardClass
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  {/* Distinct Top Color Strip per Service (Blue / Green / Purple) */}
+                  <div className={`absolute top-0 left-0 right-0 h-1.5 ${s.topBarClass}`} />
+
+                  <div className="flex items-center justify-between gap-2 pt-1">
                     <div
-                      className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-md ${
-                        isSelected
-                          ? `bg-gradient-to-br ${s.accentGradient} text-white`
-                          : 'bg-zinc-900 text-zinc-400'
-                      }`}
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-md bg-gradient-to-br ${s.accentGradient} text-white`}
                     >
                       <IconComp className="w-5 h-5" />
                     </div>
                     <span
                       className={`text-[10px] font-black px-2.5 py-1 rounded-full ${
                         isSelected
-                          ? 'bg-gradient-to-r from-pink-500 to-red-600 text-white'
-                          : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
+                          ? s.selectedPricePillClass
+                          : 'bg-slate-900/90 text-slate-200 border border-white/15'
                       }`}
                     >
                       From {s.startingPrice}
                     </span>
                   </div>
                   <div>
+                    <span className="inline-block mb-1 text-[10px] font-black uppercase tracking-wider text-white/90">
+                      {s.colorTag}
+                    </span>
                     <div className="flex items-center justify-between">
                       <h3 className="font-black text-base text-white">{s.shortName}</h3>
-                      {isSelected && <CheckCircle2 className="w-5 h-5 text-pink-400" />}
+                      {isSelected && <CheckCircle2 className={`w-5 h-5 ${s.checkIconClass}`} />}
                     </div>
-                    <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-red-600/20 border border-red-500/40 text-[10px] font-black text-red-300">
+                    <span className={`inline-block mt-1 px-2 py-0.5 rounded-md text-[10px] font-black ${s.badgeClass}`}>
                       {s.badge}
                     </span>
-                    <p className="text-[11px] text-zinc-300 mt-1.5 leading-relaxed">{s.tagline}</p>
+                    <p className="text-[11px] text-slate-200 mt-1.5 leading-relaxed">{s.tagline}</p>
                   </div>
                 </button>
               );
@@ -1575,8 +1728,8 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* LEFT COLUMN: THE CUSTOMER BOOKING SHEET WITH LIT-UP BOXES */}
           <div className="lg:col-span-7">
-            <div className="bg-zinc-950 rounded-3xl border-2 border-pink-500 shadow-[0_0_40px_rgba(236,72,153,0.25)] p-5 sm:p-7 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-pink-500 via-red-600 to-pink-500" />
+            <div className="bg-slate-950 rounded-3xl border-2 border-sky-500/70 shadow-[0_0_40px_rgba(24,119,242,0.2)] p-5 sm:p-7 relative overflow-hidden">
+              <div className={`absolute top-0 left-0 right-0 h-2 ${selectedService ? activeServiceData.topBarClass : 'bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED]'}`} />
 
               {formSubmitted ? (
                 <div className="py-8 text-center space-y-5 animate-fadeIn">
@@ -1666,21 +1819,21 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                 </div>
               ) : (
                 <form onSubmit={handleBookingSubmit} className="space-y-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
                     <div className="flex items-center gap-3">
                       <TidyUpsBunnyLogo size="sm" showRibbonText={false} />
                       <div>
-                        <span className="text-[11px] font-black text-pink-400 uppercase tracking-wider block">
-                          Step 2 of 3 • Voice &amp; Lit-Box Customer Booking Sheet
+                        <span className={`text-[11px] font-black uppercase tracking-wider block ${activeServiceData.checkIconClass}`}>
+                          Step 2 of 3 • {activeServiceData.colorTag} • Voice &amp; Lit-Box Booking Sheet
                         </span>
                         <h3 className="text-xl sm:text-2xl font-black text-white">
                           {activeServiceData.name}
                         </h3>
                       </div>
                     </div>
-                    <div className="text-right bg-gradient-to-r from-pink-950 via-red-950 to-black border-2 border-pink-500 px-3.5 py-1.5 rounded-2xl shadow-md">
-                      <span className="text-[10px] font-black uppercase text-pink-300 block">
-                        Instant Estimate (+GST)
+                    <div className={`text-right ${activeServiceData.selectedCardClass} border-2 px-3.5 py-1.5 rounded-2xl shadow-md`}>
+                      <span className={`text-[10px] font-black uppercase ${activeServiceData.checkIconClass} block`}>
+                        Instant Estimate (+Tax)
                       </span>
                       <span className="text-xl sm:text-2xl font-black font-mono text-white">
                         ${priceCalculation.total.toFixed(2)}
@@ -1694,8 +1847,8 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   <div
                     className={`p-4 rounded-2xl border-2 transition-all space-y-2.5 ${
                       isRecordingFormVoice
-                        ? 'border-red-500 bg-gradient-to-r from-red-950/90 via-pink-950/80 to-black ring-4 ring-red-500/30 shadow-[0_0_30px_rgba(239,68,68,0.45)]'
-                        : 'border-pink-500/80 bg-gradient-to-r from-black via-pink-950/35 to-black'
+                        ? 'border-amber-400 bg-gradient-to-r from-amber-950/90 via-orange-950/80 to-slate-950 ring-4 ring-amber-400/30 shadow-[0_0_30px_rgba(251,191,36,0.45)]'
+                        : 'border-cyan-400/70 bg-gradient-to-r from-slate-950 via-cyan-950/50 to-indigo-950/60'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1703,8 +1856,8 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         <div
                           className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
                             isRecordingFormVoice
-                              ? 'bg-red-600 text-white animate-pulse'
-                              : 'bg-gradient-to-br from-pink-500 to-red-600 text-white'
+                              ? 'bg-amber-500 text-slate-950 animate-pulse'
+                              : 'bg-gradient-to-br from-cyan-400 to-blue-600 text-white'
                           }`}
                         >
                           {isRecordingFormVoice ? <Volume2 className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
@@ -1713,7 +1866,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           <span className="text-xs sm:text-sm font-black text-white block">
                             🎙️ Fill Out by Voice — Watch Every Box Light Up!
                           </span>
-                          <span className="text-[11px] text-pink-200/90 block">
+                          <span className="text-[11px] text-cyan-200/90 block">
                             {isRecordingFormVoice
                               ? '● Continuous Mic Active — Pausing will NOT stop the mic! Click "Stop Mic" when finished.'
                               : 'Speak your First Name, Last Name, Phone, Address, Bedrooms, Bathrooms & Date at your own pace.'}
@@ -1721,14 +1874,14 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={handleToggleFormMic}
                           className={`px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-md transition-all ${
                             isRecordingFormVoice
-                              ? 'bg-red-600 hover:bg-red-500 text-white ring-2 ring-white/50'
-                              : 'bg-gradient-to-r from-pink-500 to-red-600 hover:from-pink-400 hover:to-red-500 text-white'
+                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-white/50'
+                              : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white'
                           }`}
                         >
                           {isRecordingFormVoice ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -1738,10 +1891,19 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           type="button"
                           disabled={isParsingFormVoice || !dictationText.trim()}
                           onClick={() => handleParseDictationIntoBlanks(dictationText)}
-                          className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-pink-600 disabled:opacity-40 border border-pink-500/50 text-white text-xs font-black flex items-center gap-1 cursor-pointer"
+                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-indigo-600 disabled:opacity-40 border border-indigo-400/50 text-white text-xs font-black flex items-center gap-1 cursor-pointer"
                         >
-                          <Wand2 className="w-3.5 h-3.5 text-pink-400" />
+                          <Wand2 className="w-3.5 h-3.5 text-cyan-300" />
                           <span>{isParsingFormVoice ? 'Lighting...' : 'Light Up Boxes'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClearSheet}
+                          className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-amber-500 border border-amber-500/70 text-amber-300 hover:text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all"
+                          title="Clear all form boxes and start over from scratch"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Start Over / Clear Sheet</span>
                         </button>
                       </div>
                     </div>
@@ -1759,11 +1921,11 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         applyLiveSpeechExtraction(e.target.value);
                       }}
                       placeholder='Speak or type here: e.g. "My name is Sarah Jenkins, 780-555-0199, 10420 98 Ave NW Edmonton, 3 bedrooms 2 bathrooms, Friday morning"'
-                      className="w-full px-3.5 py-2 bg-black/90 border border-pink-500/50 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-pink-400"
+                      className="w-full px-3.5 py-2 bg-slate-950/90 border border-cyan-500/50 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:border-cyan-400"
                     />
                     {voiceFillStatus && (
-                      <p className="text-[11px] font-black text-emerald-400 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                      <p className="text-[11px] font-black text-emerald-300 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                         <span>{voiceFillStatus}</span>
                       </p>
                     )}
@@ -1772,20 +1934,30 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   {/* ─────────────────────────────────────────────────────────────────
                       LIVE BOX LIGHTING PROGRESS BAR (See when every box is filled in!)
                      ───────────────────────────────────────────────────────────────── */}
-                  <div className="p-3.5 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-2">
+                  <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-[11px] font-black uppercase tracking-wider text-pink-400">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-emerald-300">
                         ✨ Live Box Lighting Tracker — See Every Box Light Up When Filled
                       </span>
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
-                          filledRequiredCount === requiredBoxesStatus.length
-                            ? 'bg-emerald-500 text-black shadow-[0_0_12px_rgba(16,185,129,0.5)]'
-                            : 'bg-pink-600 text-white'
-                        }`}
-                      >
-                        {filledRequiredCount} / {requiredBoxesStatus.length} Required Boxes Lit Up ✓
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleClearSheet}
+                          className="px-2.5 py-1 rounded-full bg-slate-950 hover:bg-amber-500 border border-amber-500/60 text-amber-300 hover:text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer transition-all"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Clear Sheet / Start Over</span>
+                        </button>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
+                            filledRequiredCount === requiredBoxesStatus.length
+                              ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                              : 'bg-sky-600 text-white'
+                          }`}
+                        >
+                          {filledRequiredCount} / {requiredBoxesStatus.length} Required Boxes Lit Up ✓
+                        </span>
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       {requiredBoxesStatus.map((b) => (
@@ -1794,14 +1966,14 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-black flex items-center justify-between gap-1.5 transition-all ${
                             b.filled
                               ? 'bg-emerald-950/70 border-emerald-400 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
-                              : 'bg-zinc-950 border-zinc-800 text-zinc-500'
+                              : 'bg-slate-950 border-slate-800 text-slate-400'
                           }`}
                         >
                           <span className="truncate">{b.label}</span>
                           {b.filled ? (
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           ) : (
-                            <span className="w-2 h-2 rounded-full bg-red-500/70 shrink-0" />
+                            <span className="w-2 h-2 rounded-full bg-amber-400/80 shrink-0" />
                           )}
                         </div>
                       ))}
@@ -1809,7 +1981,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   </div>
 
                   {errorMessage && (
-                    <div className="p-3 rounded-xl bg-red-950/90 border-2 border-red-500 text-red-200 text-xs font-bold">
+                    <div className="p-3 rounded-xl bg-amber-950/90 border-2 border-amber-500 text-amber-200 text-xs font-bold">
                       {errorMessage}
                     </div>
                   )}
@@ -1830,7 +2002,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         placeholder="e.g. Sarah"
                         value={firstName}
                         onChange={(e) => setFirstName(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500"
+                        className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                       />
                     </div>
 
@@ -1848,7 +2020,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         placeholder="e.g. Jenkins"
                         value={lastName}
                         onChange={(e) => setLastName(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500"
+                        className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                       />
                     </div>
 
@@ -1866,7 +2038,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         placeholder="(780) 555-0199"
                         value={customerPhone}
                         onChange={(e) => setCustomerPhone(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500"
+                        className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                       />
                     </div>
 
@@ -1883,7 +2055,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         placeholder="sarah@example.com"
                         value={customerEmail}
                         onChange={(e) => setCustomerEmail(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500"
+                        className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                       />
                     </div>
                   </div>
@@ -1913,7 +2085,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           else if (lower.includes('edmonton')) { setCity('Edmonton'); triggerFieldHighlight('city'); }
                         }}
                         placeholder="Start typing house #, street, or neighborhood (auto-completes)..."
-                        className="px-3.5 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500"
+                        className="px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                         required
                       />
                     </div>
@@ -1928,8 +2100,9 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                       <select
                         value={city}
                         onChange={(e) => setCity(e.target.value)}
-                        className="w-full px-3 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-pink-500"
+                        className="w-full px-3 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
                       >
+                        <option value="">Select City / Community...</option>
                         <option value="Edmonton">Edmonton</option>
                         <option value="Sherwood Park">Sherwood Park</option>
                         <option value="St. Albert">St. Albert</option>
@@ -1953,10 +2126,12 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           {renderLitBadge('bedrooms', Boolean(bedrooms), true)}
                         </div>
                         <select
+                          required
                           value={bedrooms}
                           onChange={(e) => setBedrooms(e.target.value)}
-                          className="w-full px-3 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-pink-500"
+                          className="w-full px-3 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
                         >
+                          <option value="">Select Bedrooms...</option>
                           <option value="1 Bedroom">1 Bedroom / Condo</option>
                           <option value="2 Bedrooms">2 Bedrooms</option>
                           <option value="3 Bedrooms">3 Bedrooms</option>
@@ -1974,10 +2149,12 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                           {renderLitBadge('bathrooms', Boolean(bathrooms), true)}
                         </div>
                         <select
+                          required
                           value={bathrooms}
                           onChange={(e) => setBathrooms(e.target.value)}
-                          className="w-full px-3 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-pink-500"
+                          className="w-full px-3 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
                         >
+                          <option value="">Select Bathrooms...</option>
                           <option value="1 Bathroom">1 Bathroom</option>
                           <option value="1.5 Bathrooms">1.5 Bathrooms</option>
                           <option value="2 Bathrooms">2 Bathrooms</option>
@@ -1988,14 +2165,14 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                         </select>
                       </div>
 
-                      <div className="p-3.5 rounded-2xl border-2 border-zinc-800 bg-zinc-900/90">
+                      <div className="p-3.5 rounded-2xl border-2 border-slate-800 bg-slate-900/90">
                         <label className="block text-xs font-black text-white mb-1.5">
                           Frequency (Save up to 15%)
                         </label>
                         <select
                           value={frequency}
                           onChange={(e) => setFrequency(e.target.value as any)}
-                          className="w-full px-3 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-pink-500"
+                          className="w-full px-3 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
                         >
                           <option value="One-Time">One-Time Cleaning</option>
                           <option value="Weekly (15% Off)">Weekly (Save 15%)</option>
@@ -2006,42 +2183,47 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     </div>
 
                     {/* STRICT CREW & MINIMUM HOURS RULES BOX */}
-                    <div className={`p-4 rounded-2xl border-2 ${getLitBoxClass('cleanerCount', true)}`}>
+                    <div className={`p-4 rounded-2xl border-2 ${getLitBoxClass('cleanerCount', Boolean(selectedService))}`}>
                       <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
                         <label className="text-xs font-black text-white flex items-center gap-1.5">
-                          <Users className="w-4 h-4 text-pink-500" />
-                          <span>Cleaner Crew &amp; Minimum Hours ({activeServiceData.name}):</span>
+                          <Users className={`w-4 h-4 ${activeServiceData.checkIconClass}`} />
+                          <span>Cleaner Crew &amp; Minimum Hours ({selectedService ? activeServiceData.name : 'Select Service Type Above'}):</span>
                         </label>
-                        {renderLitBadge('cleanerCount', true, true)}
+                        {renderLitBadge('cleanerCount', Boolean(selectedService), true)}
                       </div>
+                      {!selectedService && (
+                        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300">
+                          Pick <strong className="text-sky-300">Move-Out (Blue)</strong>, <strong className="text-emerald-300">Basic (Emerald)</strong>, or <strong className="text-violet-300">Deep Cleaning (Purple)</strong> above to select your cleaner crew.
+                        </div>
+                      )}
 
                       {selectedService === 'standard' && (
-                        <div className="p-3.5 rounded-xl bg-black border-2 border-pink-500 flex items-center justify-between gap-3">
+                        <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-950/90 via-teal-950/80 to-slate-950 border-2 border-emerald-400 flex items-center justify-between gap-3">
                           <div>
                             <div className="text-xs sm:text-sm font-black text-white">
                               👤 1 Professional Cleaner ($52.50/hr)
                             </div>
-                            <p className="text-[11px] text-zinc-300 mt-0.5">
+                            <p className="text-[11px] text-emerald-100/90 mt-0.5">
                               Basic Cleaning is locked to <strong>1 Pro Cleaner</strong> ({priceCalculation.hoursLabel}).
                             </p>
                           </div>
-                          <span className="px-3 py-1 rounded-xl bg-pink-600 text-white text-xs font-black shrink-0">
+                          <span className="px-3 py-1 rounded-xl bg-emerald-600 text-white text-xs font-black shrink-0">
                             1 Cleaner Only
                           </span>
                         </div>
                       )}
 
                       {selectedService === 'deep' && (
-                        <div className="p-3.5 rounded-xl bg-black border-2 border-pink-500 flex items-center justify-between gap-3">
+                        <div className="p-3.5 rounded-xl bg-gradient-to-r from-violet-950/90 via-purple-950/80 to-slate-950 border-2 border-violet-400 flex items-center justify-between gap-3">
                           <div>
                             <div className="text-xs sm:text-sm font-black text-white">
                               👥 2 Professional Cleaners — Minimum 2 Hours ($105.00/hr)
                             </div>
-                            <p className="text-[11px] text-zinc-300 mt-0.5">
+                            <p className="text-[11px] text-violet-100/90 mt-0.5">
                               Deep Cleaning requires a <strong>minimum of 2 cleaners for 2+ hours</strong> ({priceCalculation.hoursLabel}).
                             </p>
                           </div>
-                          <span className="px-3 py-1 rounded-xl bg-red-600 text-white text-xs font-black shrink-0">
+                          <span className="px-3 py-1 rounded-xl bg-violet-600 text-white text-xs font-black shrink-0">
                             Min 2 Cleaners • 2+ Hrs
                           </span>
                         </div>
@@ -2057,17 +2239,17 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                             }}
                             className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
                               cleanerCount === 2
-                                ? 'bg-gradient-to-r from-pink-950 via-red-950 to-black border-pink-500 text-white shadow-md'
-                                : 'bg-black border-zinc-800 text-zinc-400 hover:border-pink-500/50'
+                                ? 'bg-gradient-to-r from-sky-950 via-blue-950 to-slate-950 border-sky-400 text-white shadow-md'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-sky-400/50'
                             }`}
                           >
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-black text-white">
                                 👥 2 Cleaners (Min 3 Hours)
                               </span>
-                              {cleanerCount === 2 && <CheckCircle2 className="w-4 h-4 text-pink-400" />}
+                              {cleanerCount === 2 && <CheckCircle2 className="w-4 h-4 text-sky-400" />}
                             </div>
-                            <div className="text-[11px] font-bold text-pink-300 mt-1">
+                            <div className="text-[11px] font-bold text-sky-300 mt-1">
                               Minimum 3 Hrs @ $105.00/hr ($315.00+)
                             </div>
                           </button>
@@ -2080,17 +2262,17 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                             }}
                             className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
                               cleanerCount === 1
-                                ? 'bg-gradient-to-r from-pink-950 via-red-950 to-black border-pink-500 text-white shadow-md'
-                                : 'bg-black border-zinc-800 text-zinc-400 hover:border-pink-500/50'
+                                ? 'bg-gradient-to-r from-sky-950 via-blue-950 to-slate-950 border-sky-400 text-white shadow-md'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-sky-400/50'
                             }`}
                           >
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-black text-white">
                                 👤 1 Cleaner (Starts at 6 Hours)
                               </span>
-                              {cleanerCount === 1 && <CheckCircle2 className="w-4 h-4 text-pink-400" />}
+                              {cleanerCount === 1 && <CheckCircle2 className="w-4 h-4 text-sky-400" />}
                             </div>
-                            <div className="text-[11px] font-bold text-red-300 mt-1">
+                            <div className="text-[11px] font-bold text-cyan-300 mt-1">
                               Starts at 6 Hrs Minimum @ $52.50/hr ($315.00+)
                             </div>
                           </button>
@@ -2100,9 +2282,9 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   </div>
 
                   {/* Optional Add-ons */}
-                  <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                  <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800">
                     <label className="block text-xs font-black text-white mb-2.5 flex items-center gap-1.5">
-                      <Tag className="w-3.5 h-3.5 text-pink-500" />
+                      <Tag className={`w-3.5 h-3.5 ${activeServiceData.checkIconClass}`} />
                       <span>Optional Extra Add-Ons (Click to Add):</span>
                     </label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -2115,14 +2297,14 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                             onClick={() => handleToggleAddon(addon.id)}
                             className={`p-2.5 rounded-xl border-2 text-left text-xs transition-all cursor-pointer flex items-center justify-between gap-1.5 ${
                               isChecked
-                                ? 'bg-pink-950/80 border-pink-500 text-white font-black shadow-sm'
-                                : 'bg-black border-zinc-800 text-zinc-300 font-bold hover:border-pink-500/50'
+                                ? `${activeServiceData.selectedCardClass} text-white font-black shadow-sm`
+                                : 'bg-slate-950 border-slate-800 text-slate-300 font-bold hover:border-sky-400/50'
                             }`}
                           >
                             <span className="truncate">
                               {addon.icon} {addon.label}
                             </span>
-                            <span className="text-[10px] font-mono font-black px-1.5 py-0.5 rounded bg-zinc-900 border border-pink-500/40 text-pink-300 shrink-0">
+                            <span className={`text-[10px] font-mono font-black px-1.5 py-0.5 rounded bg-slate-900 border ${activeServiceData.badgeClass} shrink-0`}>
                               +${addon.price}
                             </span>
                           </button>
@@ -2256,15 +2438,16 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                       <div className="flex items-center justify-between mb-1.5">
                         <label className="block text-xs font-black text-white flex items-center gap-1.5">
                           <Clock className="w-3.5 h-3.5 text-red-500" />
-                          <span>Preferred Arrival Window *</span>
+                          <span>Preferred Arrival Window</span>
                         </label>
-                        {renderLitBadge('preferredTime', Boolean(preferredTime), true)}
+                        {renderLitBadge('preferredTime', Boolean(preferredTime), false)}
                       </div>
                       <select
                         value={preferredTime}
                         onChange={(e) => setPreferredTime(e.target.value)}
                         className="w-full px-3 py-2.5 bg-black/90 border border-zinc-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-pink-500"
                       >
+                        <option value="">Select Preferred Arrival Window...</option>
                         <option value="Morning (8:00 AM - 12:00 PM)">☀️ Morning (8:00 AM - 12:00 PM)</option>
                         <option value="Afternoon (12:00 PM - 4:00 PM)">🌤️ Afternoon (12:00 PM - 4:00 PM)</option>
                         <option value="Evening (4:00 PM - 7:00 PM)">🌙 Evening (4:00 PM - 7:00 PM)</option>
@@ -2318,26 +2501,41 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Submit Button */}
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-pink-600 via-red-600 to-pink-600 hover:from-pink-500 hover:via-red-500 hover:to-pink-500 text-white font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-[0_0_25px_rgba(236,72,153,0.45)] transition-all active:scale-[0.99] cursor-pointer disabled:opacity-50"
-                  >
-                    {isSubmitting ? (
-                      <span>Submitting Your Cleaning Booking...</span>
-                    ) : (
-                      <>
-                        <Sparkles className="w-5 h-5" />
-                        <span>
-                          Confirm &amp; Request Booking ({priceCalculation.effectiveCleaners} Cleaner
-                          {priceCalculation.effectiveCleaners > 1 ? 's' : ''}) — ${priceCalculation.total.toFixed(2)} CAD
-                        </span>
-                        <ArrowRight className="w-5 h-5" />
-                      </>
-                    )}
-                  </button>
-                  <p className="text-[11px] text-center font-bold text-zinc-400">
+                  {/* Submit & Start Over / Clear Sheet Buttons */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className={`flex-1 py-4 px-6 rounded-2xl bg-gradient-to-r ${
+                        selectedService
+                          ? activeServiceData.accentGradient
+                          : 'from-[#1877F2] via-[#0F9D58] to-[#7C3AED]'
+                      } hover:opacity-95 text-white font-black text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-[0_0_25px_rgba(24,119,242,0.4)] transition-all active:scale-[0.99] cursor-pointer disabled:opacity-50`}
+                    >
+                      {isSubmitting ? (
+                        <span>Submitting Your Cleaning Booking...</span>
+                      ) : (
+                        <>
+                          <Sparkles className="w-5 h-5" />
+                          <span>
+                            Confirm &amp; Request Booking ({priceCalculation.effectiveCleaners} Cleaner
+                            {priceCalculation.effectiveCleaners > 1 ? 's' : ''}) — ${priceCalculation.total.toFixed(2)} CAD
+                          </span>
+                          <ArrowRight className="w-5 h-5" />
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearSheet}
+                      className="py-4 px-5 rounded-2xl bg-slate-900 hover:bg-amber-600 border-2 border-amber-500/60 text-amber-200 hover:text-white text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+                      title="Clear all form boxes and start over from scratch"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Start Over / Clear Sheet</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-center font-bold text-slate-400">
                     🔒 No upfront card charge today • Synced directly with our official Jobber Price List!
                   </p>
                 </form>
@@ -2348,12 +2546,12 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
           {/* RIGHT COLUMN: LIVE INSTANT PRICE SUMMARY + PACKAGE CHECKLIST + GUARANTEE */}
           <div className="lg:col-span-5 space-y-6">
             {/* Instant Price Summary Card */}
-            <div className="bg-gradient-to-br from-zinc-950 via-black to-red-950/60 text-white rounded-3xl border-2 border-pink-500 shadow-[0_0_35px_rgba(236,72,153,0.25)] p-6 space-y-4">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-3.5">
+            <div className="bg-gradient-to-br from-slate-950 via-indigo-950/80 to-slate-900 text-white rounded-3xl border-2 border-sky-500/70 shadow-[0_0_35px_rgba(24,119,242,0.25)] p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3.5">
                 <div className="flex items-center gap-3">
                   <TidyUpsBunnyLogo size="md" />
                   <div>
-                    <span className="text-[10px] font-black uppercase tracking-wider text-pink-400 block">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-sky-400 block">
                       Step 3 of 3 • Official Catalog Price Breakdown
                     </span>
                     <h3 className="text-base font-black text-white">
@@ -2361,7 +2559,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     </h3>
                   </div>
                 </div>
-                <span className="px-2.5 py-1 rounded-full bg-gradient-to-r from-pink-600 to-red-600 text-white text-[10px] font-black uppercase">
+                <span className={`px-2.5 py-1 rounded-full bg-gradient-to-r ${activeServiceData.accentGradient} text-white text-[10px] font-black uppercase`}>
                   {frequency}
                 </span>
               </div>
@@ -2369,8 +2567,8 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <div className="space-y-2.5 text-xs">
                 <div className="flex justify-between items-start gap-2">
                   <div>
-                    <div className="font-black text-pink-400">{priceCalculation.matchedItemName}</div>
-                    <div className="text-[11px] text-zinc-300 mt-0.5">
+                    <div className="font-black text-sky-300">{priceCalculation.matchedItemName}</div>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
                       {bedrooms} • {bathrooms} • {priceCalculation.hoursLabel}
                     </div>
                   </div>
@@ -2380,40 +2578,40 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                 </div>
 
                 {/* Crew & Minimum Hours Rule Callout */}
-                <div className="p-2.5 rounded-xl bg-black/80 border border-pink-500/40 text-[11px] text-pink-200 font-bold">
+                <div className="p-2.5 rounded-xl bg-slate-950/90 border border-sky-500/40 text-[11px] text-sky-200 font-bold">
                   🐰 <strong>Crew Rule:</strong> {activeServiceData.ruleSummary}
                 </div>
 
                 {selectedAddons.length > 0 && (
-                  <div className="pt-2 border-t border-zinc-800 space-y-1">
-                    <span className="text-[10px] font-black uppercase text-red-400 block">
+                  <div className="pt-2 border-t border-slate-800 space-y-1">
+                    <span className="text-[10px] font-black uppercase text-emerald-400 block">
                       Selected Add-Ons:
                     </span>
                     {selectedAddons.map((id) => {
                       const addon = ADDON_OPTIONS.find((a) => a.id === id);
                       if (!addon) return null;
                       return (
-                        <div key={id} className="flex justify-between text-xs text-zinc-200">
+                        <div key={id} className="flex justify-between text-xs text-slate-200">
                           <span>
                             {addon.icon} {addon.label}
                           </span>
-                          <span className="font-mono font-bold text-pink-300">+${addon.price.toFixed(2)}</span>
+                          <span className="font-mono font-bold text-emerald-300">+${addon.price.toFixed(2)}</span>
                         </div>
                       );
                     })}
                   </div>
                 )}
 
-                <div className="pt-3 border-t border-zinc-800 space-y-1">
-                  <div className="flex justify-between text-zinc-300">
+                <div className="pt-3 border-t border-slate-800 space-y-1">
+                  <div className="flex justify-between text-slate-300">
                     <span>Subtotal:</span>
                     <span className="font-mono font-bold">${priceCalculation.subtotal.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-zinc-300">
+                  <div className="flex justify-between text-slate-300">
                     <span>Alberta GST (5%):</span>
                     <span className="font-mono font-bold">${priceCalculation.gst.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between items-center pt-2 border-t border-zinc-800 text-base font-black text-pink-400">
+                  <div className="flex justify-between items-center pt-2 border-t border-slate-800 text-base font-black text-emerald-400">
                     <span>Estimated Total (CAD):</span>
                     <span className="font-mono text-2xl text-white">${priceCalculation.total.toFixed(2)}</span>
                   </div>
@@ -2422,23 +2620,23 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
             </div>
 
             {/* Detailed Package Checklist Card */}
-            <div className="bg-zinc-950 rounded-3xl border-2 border-pink-500/60 shadow-lg p-6 space-y-4">
-              <div className="flex items-start justify-between gap-3 border-b border-zinc-800 pb-3">
+            <div className="bg-slate-950 rounded-3xl border-2 border-purple-500/60 shadow-lg p-6 space-y-4">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
                 <div>
-                  <span className="inline-block px-2.5 py-0.5 rounded-full bg-red-600/20 border border-red-500/50 text-red-300 text-[10px] font-black uppercase">
+                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${activeServiceData.badgeClass}`}>
                     {activeServiceData.badge}
                   </span>
                   <h4 className="text-lg font-black text-white mt-1">
                     What&apos;s Included in {activeServiceData.shortName}
                   </h4>
-                  <p className="text-xs text-zinc-400 mt-0.5">{activeServiceData.tagline}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{activeServiceData.tagline}</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-2">
                 {activeServiceData.checklist.map((item, idx) => (
-                  <div key={idx} className="flex items-start gap-2 text-xs text-zinc-200 font-medium">
-                    <div className="w-4 h-4 rounded-full bg-gradient-to-r from-pink-500 to-red-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                  <div key={idx} className="flex items-start gap-2 text-xs text-slate-200 font-medium">
+                    <div className={`w-4 h-4 rounded-full bg-gradient-to-r ${activeServiceData.accentGradient} text-white flex items-center justify-center shrink-0 mt-0.5`}>
                       <Check className="w-2.5 h-2.5 stroke-[3]" />
                     </div>
                     <span>{item}</span>
@@ -2448,25 +2646,25 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
             </div>
 
             {/* 24-Hour Satisfaction Guarantee Card */}
-            <div className="bg-gradient-to-r from-pink-950 via-red-950 to-black rounded-3xl border-2 border-red-500 p-5 space-y-3 shadow-lg">
+            <div className="bg-gradient-to-r from-emerald-950/90 via-teal-950/80 to-slate-950 rounded-3xl border-2 border-emerald-500/70 p-5 space-y-3 shadow-lg">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-black border border-pink-500 text-pink-400 flex items-center justify-center shrink-0 shadow-md">
+                <div className="w-12 h-12 rounded-2xl bg-slate-950 border border-emerald-400 text-emerald-400 flex items-center justify-center shrink-0 shadow-md">
                   <HeartHandshake className="w-6 h-6" />
                 </div>
                 <div>
                   <h4 className="font-black text-sm text-white">
                     The TidyUps 24-Hour Clean Guarantee
                   </h4>
-                  <p className="text-xs font-medium text-zinc-200 leading-snug mt-0.5">
+                  <p className="text-xs font-medium text-slate-200 leading-snug mt-0.5">
                     If you or your landlord spot any missed item on your checklist within 24 hours, our crew returns and re-cleans it free of charge!
                   </p>
                 </div>
               </div>
-              <div className="pt-2 border-t border-pink-500/30 flex flex-wrap items-center justify-between gap-2 text-xs font-black text-zinc-200">
+              <div className="pt-2 border-t border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 text-xs font-black text-slate-200">
                 <span>Questions? Email our Edmonton booking team:</span>
                 <a
                   href="mailto:booking@tidyupscleaning.com"
-                  className="text-pink-400 underline hover:text-pink-300 font-mono"
+                  className="text-emerald-300 underline hover:text-emerald-200 font-mono"
                 >
                   booking@tidyupscleaning.com
                 </a>
@@ -2477,9 +2675,9 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       </section>
 
       {/* ─────────────────────────────────────────────────────────────────────────────
-          4. CUSTOMER-ONLY FOOTER (BLACK, HOT PINK & BRIGHT RED — NO PHONE NUMBERS)
+          4. CUSTOMER-ONLY FOOTER (MULTI-COLOR SLATE THEME — NO PHONE NUMBERS)
          ───────────────────────────────────────────────────────────────────────────── */}
-      <footer className="bg-zinc-950 text-zinc-300 border-t-2 border-pink-500 py-8 px-4 sm:px-6 lg:px-8 mt-4">
+      <footer className="bg-slate-950 text-slate-300 border-t-2 border-sky-500/60 py-8 px-4 sm:px-6 lg:px-8 mt-4">
         <div className="max-w-7xl mx-auto space-y-5">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
             <div className="flex items-center gap-3">

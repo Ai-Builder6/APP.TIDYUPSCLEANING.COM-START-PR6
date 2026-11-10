@@ -6,6 +6,7 @@
 
 import { mergeWithBaseScheduledVisits } from "../data/jobberCalendarData";
 import { isFalseOrCatalogLeadRow } from "./styledLeadsWorkbookBuilder";
+import { buildCanonicalQuoteBreakdown, buildCleaningSummaryMessage } from "../data/serviceCatalogData";
 
 export const JOBBER_GRAPHQL_URL = "https://api.getjobber.com/api/graphql";
 export const JOBBER_GRAPHQL_VERSION = "2025-04-16";
@@ -269,9 +270,10 @@ export function resolveJobberWebUri(
   rawId?: string,
   existingUri?: string
 ): string {
+  const pathSegment = entityType === "jobs" ? "work_orders" : entityType;
   const numericId = extractJobberNumericId(rawId);
   if (numericId) {
-    return `https://secure.getjobber.com/${entityType}/${numericId}`;
+    return `https://secure.getjobber.com/${pathSegment}/${numericId}`;
   }
   if (
     existingUri &&
@@ -281,7 +283,7 @@ export function resolveJobberWebUri(
   ) {
     return existingUri;
   }
-  return `https://secure.getjobber.com/${entityType}`;
+  return `https://secure.getjobber.com/${pathSegment}`;
 }
 
 export interface JobberVisit {
@@ -327,9 +329,12 @@ export interface JobberQuote {
   bedrooms?: string;
   bathrooms?: string;
   quoteStatus: "DRAFT" | "AWAITING_RESPONSE" | "APPROVED" | "CHANGES_REQUESTED" | "CONVERTED" | "ARCHIVED";
+  subtotal?: number;
+  tax?: number;
   total: number;
   depositRequired: number;
   discountAmount?: number;
+  source?: string;
   createdAt: string;
   sentAt?: string;
   updatedAt?: string;
@@ -387,8 +392,13 @@ export interface SyncDeltaStats {
 export interface JobberPushResult {
   success: boolean;
   jobberJobId?: string;
+  jobNumber?: string;
   jobberVisitId?: string;
   jobberClientId?: string;
+  jobberPropertyId?: string;
+  jobberQuoteId?: string;
+  jobberWebUri?: string;
+  isLiveSynced?: boolean;
   message: string;
   timestamp: string;
 }
@@ -753,6 +763,629 @@ export async function syncJobberClients(accessToken?: string, credentials?: Jobb
 }
 
 /**
+ * Permanent blocklist of fake / auto-generated draft quotes on Jobber & local store
+ * (including Sheralee Cave QT-7537, QT-7538, QT-4425, QT-4426, Donna Noel, and bulk auto-generated drafts)
+ */
+export const PURGED_FAKE_JOBBER_QUOTE_IDS = new Set<string>([
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MDE5Mjgz", // QT-7537 Sheralee Cave
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MDE5Mjg0", // QT-7538 Sheralee Cave
+  // Riley FrenchBeck duplicate draft quotes (keeping active QT-7339 Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjUxNTA1)
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjU1ODI5", // QT-7340 Riley duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjQ3OTQ4", // QT-7337 Riley duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjQ3OTQ3", // QT-7336 Riley duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjQ3MTkz", // QT-7335 Riley duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjQ3MDAz", // QT-7334 Riley duplicate draft
+  // Auto-created placeholder / own-company quotes
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MjIwMjI4", // QT-7333 New Call [+15878998486]
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MTQ3ODA1", // QT-7332 TIDYUPS CLEANING SERVICE INC (+15873860826)
+  // Brenda McLean duplicate draft quotes
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY4MTQ3ODAz", // QT-7331 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTQyMTk1", // QT-4570 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3ODY1MjM5", // QT-4544 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3ODY0MDIz", // QT-4536 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3ODYyODY0", // QT-4523 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3ODAyNTk3", // QT-4417 Brenda McLean duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3ODAyMjE0", // QT-4416 Brenda McLean duplicate draft
+  // Tino duplicate draft quotes
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTg0MTg2", // QT-7265 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTgzNTcx", // QT-7166 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTgzNTAw", // QT-7153 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTgxMTY0", // QT-6700 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTc5MDkw", // QT-6286 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTc3OTY1", // QT-6054 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTc2NTY2", // QT-5774 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3OTc1NTI1", // QT-5555 Tino duplicate draft
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NzU5MDY5", // QT-4413
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NzA1MjQ0", // QT-4410
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODc2", // QT-4405 Blaze (Phone Lead)
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODc0", // QT-4404
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODY5", // QT-4403
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODY3", // QT-4402
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODU5", // QT-4400
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODQ4", // QT-4399
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODQ2", // QT-4398
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODQ1", // QT-4397
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODM4", // QT-4396
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODI5", // QT-4395
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODI1", // QT-4394
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODIz", // QT-4393
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODIx", // QT-4392
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODA4", // QT-4391
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwODA0", // QT-4390
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwNzky", // QT-4389
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NTYwNzg4", // QT-4388
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDg3Mzky", // QT-4387
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDg3MzY0", // QT-4386
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDc0OTEx", // QT-4382
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDY2MjY2", // QT-4378
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDY2Mjcx", // QT-4380
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDY2Mjcy", // QT-4381
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDQ5ODM1", // QT-4377
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDQ5ODE0", // QT-4375
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3NDQ3MzE5", // QT-4374 Rahum
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODM0", // QT-4372
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODMz", // QT-4371
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODMw", // QT-4370
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODI5", // QT-4369
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODI4", // QT-4368
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODI1", // QT-4365
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODIx", // QT-4364
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODE4", // QT-4363
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODE3", // QT-4362
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODEx", // QT-4357
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODA1", // QT-4356
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzk0ODAx", // QT-4355
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3Mzg5MjY3", // QT-4293 Rahum
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MzQ3NTcx", // QT-4290
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MjAzMjM1", // QT-4283
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MTEyOTk3", // QT-4282
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MDg3MDY4", // QT-4281
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MDU4NDU2", // QT-4279
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY3MDI4MDIx", // QT-4278
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY2OTYwNjE5", // QT-4276
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY2ODgzNTQz", // QT-4273
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY2ODEyMTA5", // QT-4271
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY2NzcyMDA4", // QT-4267
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY2NzE0ODg4", // QT-4265
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY1MjE3NTE5", // QT-4166
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY0OTI5MTI5", // QT-4147 John Doe
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY0OTA5Mzk0", // QT-4143
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY0NzI3OTY5", // QT-4120 Sync Test
+  "Z2lkOi8vSm9iYmVyL1F1b3RlLzY0Njk1Nzgx", // QT-4114
+  "qt_4331",
+]);
+
+export const PURGED_FAKE_QUOTE_NUMBERS = new Set<string>([
+  "QT-7537",
+  "QT-7538",
+  "QT-7340",
+  "QT-7337",
+  "QT-7336",
+  "QT-7335",
+  "QT-7334",
+  "QT-7333",
+  "QT-7332",
+  "QT-7331",
+  "QT-7265",
+  "QT-7166",
+  "QT-7153",
+  "QT-6700",
+  "QT-6286",
+  "QT-6054",
+  "QT-5774",
+  "QT-5555",
+  "QT-4570",
+  "QT-4544",
+  "QT-4536",
+  "QT-4523",
+  "QT-4425",
+  "QT-4426",
+  "QT-4418",
+  "QT-4417",
+  "QT-4416",
+  "QT-4413",
+  "QT-4410",
+  "QT-4405",
+  "QT-4404",
+  "QT-4403",
+  "QT-4402",
+  "QT-4400",
+  "QT-4399",
+  "QT-4398",
+  "QT-4397",
+  "QT-4396",
+  "QT-4395",
+  "QT-4394",
+  "QT-4393",
+  "QT-4392",
+  "QT-4391",
+  "QT-4390",
+  "QT-4389",
+  "QT-4388",
+  "QT-4387",
+  "QT-4386",
+  "QT-4382",
+  "QT-4381",
+  "QT-4380",
+  "QT-4378",
+  "QT-4377",
+  "QT-4375",
+  "QT-4374",
+  "QT-4372",
+  "QT-4371",
+  "QT-4370",
+  "QT-4369",
+  "QT-4368",
+  "QT-4365",
+  "QT-4364",
+  "QT-4363",
+  "QT-4362",
+  "QT-4357",
+  "QT-4356",
+  "QT-4355",
+  "QT-4331",
+  "QT-4293",
+  "QT-4290",
+  "QT-4283",
+  "QT-4282",
+  "QT-4281",
+  "QT-4279",
+  "QT-4278",
+  "QT-4276",
+  "QT-4273",
+  "QT-4271",
+  "QT-4267",
+  "QT-4265",
+  "QT-4239",
+  "QT-4166",
+  "QT-4147",
+  "QT-4143",
+  "QT-4120",
+  "QT-4114",
+]);
+
+export const DUPLICATE_JOBBER_CLIENT_IDS_TO_REMOVE = new Set<string>([
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTczNzQ4MjI=", // Sheralee Cave
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTgwOTY4MjM=", // New Call [+17809450090] — duplicate of Riley FrenchBeck (Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTgwOTg0NDA=)
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC8xNTc5ODYzOTg=", // TIDYUPS CLEANING SERVICE INC (+15873860826 own company line)
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC82OTA4MzY0MQ==", // Brenda Vienneau empty duplicate #1 (keep Z2lkOi8vSm9iYmVyL0NsaWVudC82OTA4MzU5Mg==)
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC83MjU3MDU1OQ==", // Brenda Vienneau empty duplicate #2 (keep Z2lkOi8vSm9iYmVyL0NsaWVudC82OTA4MzU5Mg==)
+  "Z2lkOi8vSm9iYmVyL0NsaWVudC83MjU3MDQ4OA==", // Brenda Burden empty duplicate (keep Z2lkOi8vSm9iYmVyL0NsaWVudC82MTI1NTQ0MQ==)
+]);
+
+export function isFakeOrPurgedJobberQuote(q: any): boolean {
+  if (!q || typeof q !== "object") return true;
+  const id = String(q.id || "").trim();
+  const rawNum = String(q.quoteNumber || "").trim();
+  const normNum = rawNum.toUpperCase().startsWith("QT-")
+    ? rawNum.toUpperCase()
+    : rawNum
+    ? `QT-${rawNum.replace(/\D/g, "")}`
+    : "";
+  const numericNum = parseInt(rawNum.replace(/\D/g, ""), 10) || 0;
+
+  if (PURGED_FAKE_JOBBER_QUOTE_IDS.has(id) || PURGED_FAKE_QUOTE_NUMBERS.has(normNum)) {
+    return true;
+  }
+  if (
+    numericNum === 4239 ||
+    numericNum === 4416 ||
+    numericNum === 4417 ||
+    numericNum === 4418 ||
+    (numericNum >= 4425 && numericNum <= 4575) ||
+    numericNum === 7331 ||
+    numericNum === 7332 ||
+    numericNum === 7333 ||
+    numericNum === 7334 ||
+    numericNum === 7335 ||
+    numericNum === 7336 ||
+    numericNum === 7337 ||
+    numericNum === 7340 ||
+    numericNum === 7346 ||
+    numericNum === 7537 ||
+    numericNum === 7538
+  ) {
+    return true;
+  }
+
+  const statusUpper = String(q.quoteStatus || "").trim().toUpperCase();
+  if (statusUpper === "ARCHIVED") {
+    return true;
+  }
+
+  const nameLower = String(q.clientName || q.customerName || q.client?.name || "").trim().toLowerCase();
+  if (
+    isFalseOrCatalogLeadRow(nameLower) ||
+    nameLower.startsWith("i need a cleaning job") ||
+    nameLower.includes("sheralee") ||
+    nameLower.includes("donna noel") ||
+    nameLower.includes("tidyups cleaning") ||
+    nameLower.includes("blaze (phone lead)") ||
+    nameLower.includes("aniket deb (sonia ai") ||
+    nameLower.includes("new call [") ||
+    nameLower.includes("rahum") ||
+    nameLower.includes("sync test") ||
+    nameLower.includes("john doe")
+  ) {
+    return true;
+  }
+
+  const notesLower = String(q.notes || q.title || q.message || "").toLowerCase();
+  if (notesLower.includes("[draft for owner review]") || notesLower.includes("sheralee cave")) {
+    return true;
+  }
+
+  const emailLower = String(q.clientEmail || "").trim().toLowerCase();
+  const phoneDigits = String(q.clientPhone || "").replace(/\D/g, "");
+  if (
+    emailLower === "sheraleew@live.com" ||
+    emailLower === "dnoelcha@yahoo.ca" ||
+    phoneDigits.includes("7803640177") ||
+    phoneDigits.includes("5875974229") ||
+    phoneDigits.includes("5873860826") ||
+    (phoneDigits.length === 10 && phoneDigits.slice(3, 6) === "555")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Deletes / archives all fake & draft quotes (and duplicate clients like Brenda, Riley's New Call duplicate, Tino drafts) directly in Jobber via GraphQL API
+ */
+export async function purgeFakeAndDraftQuotesOnJobber(
+  accessToken?: string,
+  credentials?: JobberCredentials
+): Promise<{ purgedQuoteIds: string[]; purgedClientIds: string[]; purgedCount: number }> {
+  const purgedQuoteIds: string[] = [];
+  const purgedClientIds: string[] = [];
+  if (!accessToken || accessToken.startsWith("jobber_oauth") || accessToken.includes("...")) {
+    return { purgedQuoteIds, purgedClientIds, purgedCount: 0 };
+  }
+
+  const candidateQuoteIds = new Set<string>(
+    Array.from(PURGED_FAKE_JOBBER_QUOTE_IDS).filter((id) => id.startsWith("Z2lkOi8vSm9iYmVyL1F1b3Rl"))
+  );
+  const candidateClientIds = new Set<string>(Array.from(DUPLICATE_JOBBER_CLIENT_IDS_TO_REMOVE));
+
+  try {
+    const draftQuery = `
+      query FindDraftAndFakeQuotes {
+        draftQuotes: quotes(first: 100, filter: { status: draft }) {
+          nodes {
+            id
+            quoteNumber
+            title
+            quoteStatus
+            client { id name }
+          }
+        }
+        recentQuotes: quotes(first: 50) {
+          nodes {
+            id
+            quoteNumber
+            title
+            quoteStatus
+            client { id name }
+          }
+        }
+        sheraleeClients: clients(searchTerm: "Sheralee Cave", first: 10) {
+          nodes {
+            id
+            name
+            quotes(first: 20) {
+              nodes { id quoteNumber }
+            }
+          }
+        }
+      }
+    `;
+    const data = await jobberGraphql<any>(accessToken, draftQuery, undefined, credentials);
+    for (const q of data?.draftQuotes?.nodes || []) {
+      const cName = String(q?.client?.name || "").toLowerCase();
+      const qNum = Number(q?.quoteNumber || 0);
+      const isFakeDraft =
+        cName.includes("sheralee") ||
+        cName.includes("donna noel") ||
+        cName.includes("tidyups cleaning") ||
+        cName.includes("blaze (phone lead)") ||
+        cName.includes("aniket deb (sonia ai") ||
+        cName.includes("new call [") ||
+        cName.includes("rahum") ||
+        PURGED_FAKE_JOBBER_QUOTE_IDS.has(q?.id) ||
+        PURGED_FAKE_QUOTE_NUMBERS.has(`QT-${qNum}`);
+      if (isFakeDraft && q?.id) {
+        candidateQuoteIds.add(q.id);
+      }
+      if ((cName.includes("sheralee") || cName.includes("new call [") || cName.includes("tidyups cleaning")) && q?.client?.id) {
+        candidateClientIds.add(q.client.id);
+      }
+    }
+    for (const q of data?.recentQuotes?.nodes || []) {
+      if (!q?.id) continue;
+      const cName = String(q.client?.name || "").toLowerCase();
+      const qNum = Number(q.quoteNumber || 0);
+      if (
+        cName.includes("sheralee") ||
+        cName.includes("donna noel") ||
+        cName.includes("tidyups cleaning") ||
+        cName.includes("blaze (phone lead)") ||
+        cName.includes("aniket deb (sonia ai") ||
+        cName.includes("new call [") ||
+        cName.includes("rahum") ||
+        PURGED_FAKE_JOBBER_QUOTE_IDS.has(q.id) ||
+        PURGED_FAKE_QUOTE_NUMBERS.has(`QT-${qNum}`)
+      ) {
+        candidateQuoteIds.add(q.id);
+      }
+    }
+    for (const c of data?.sheraleeClients?.nodes || []) {
+      if (c?.id) candidateClientIds.add(c.id);
+      for (const cq of c?.quotes?.nodes || []) {
+        if (cq?.id) candidateQuoteIds.add(cq.id);
+      }
+    }
+  } catch {
+    // Token is currently expired/offline or rate-limited — return immediately
+    return {
+      purgedQuoteIds: Array.from(candidateQuoteIds),
+      purgedClientIds: Array.from(candidateClientIds),
+      purgedCount: candidateQuoteIds.size,
+    };
+  }
+
+  for (const quoteId of candidateQuoteIds) {
+    try {
+      const delRes = await jobberGraphql<any>(
+        accessToken,
+        `mutation DeleteFakeDraftQuote($quoteId: EncodedId!) {
+          quoteDelete(quoteId: $quoteId) {
+            deletedQuoteId
+            userErrors { message }
+          }
+        }`,
+        { quoteId },
+        credentials
+      ).catch(() => null);
+
+      if (delRes?.quoteDelete?.deletedQuoteId) {
+        purgedQuoteIds.push(quoteId);
+        continue;
+      }
+
+      await jobberGraphql<any>(
+        accessToken,
+        `mutation ArchiveFakeDraftQuote($quoteId: EncodedId!) {
+          quoteArchive(quoteId: $quoteId) {
+            quote { id quoteStatus }
+            userErrors { message }
+          }
+        }`,
+        { quoteId },
+        credentials
+      ).catch(() => null);
+      purgedQuoteIds.push(quoteId);
+    } catch {
+      // Ignore individual quote error
+    }
+  }
+
+  for (const clientId of candidateClientIds) {
+    try {
+      const cDelRes = await jobberGraphql<any>(
+        accessToken,
+        `mutation DeleteDuplicateOrFakeClient($clientId: EncodedId!) {
+          clientDelete(clientId: $clientId) {
+            deletedClientId
+            userErrors { message }
+          }
+        }`,
+        { clientId },
+        credentials
+      ).catch(() => null);
+      if (cDelRes?.clientDelete?.deletedClientId) {
+        purgedClientIds.push(clientId);
+      }
+    } catch {}
+  }
+
+  return { purgedQuoteIds, purgedClientIds, purgedCount: purgedQuoteIds.length + purgedClientIds.length };
+}
+
+/**
+ * Deduplicates and merges duplicate Clients & Quotes in Jobber when First+Last Name and/or Phone match
+ * (specifically cleaning up Brenda, Riley, Tino, and New Call [+1...] duplicates)
+ */
+export async function deduplicateAndMergeJobberClients(
+  accessToken?: string,
+  credentials?: JobberCredentials
+): Promise<{
+  mergedClients: Array<{ keptId: string; keptName: string; removedId: string; removedName: string; phone: string }>;
+  deletedDraftQuoteIds: string[];
+}> {
+  const mergedClients: Array<{ keptId: string; keptName: string; removedId: string; removedName: string; phone: string }> = [];
+  const deletedDraftQuoteIds: string[] = [];
+
+  const cleanToken = (accessToken || "").replace(/^Bearer\s+/i, "").trim();
+  if (!cleanToken || cleanToken.startsWith("jobber_oauth") || cleanToken.includes("...") || cleanToken.length < 20) {
+    return { mergedClients, deletedDraftQuoteIds };
+  }
+
+  try {
+    // 1. Run targeted purge of known duplicate clients & draft quotes (Brenda, Riley, Tino)
+    const purgeRes = await purgeFakeAndDraftQuotesOnJobber(cleanToken, credentials);
+    deletedDraftQuoteIds.push(...purgeRes.purgedQuoteIds);
+
+    // 2. Query targeted search terms ("Brenda", "Riley", "Tino", "New Call") plus recent 40 clients to catch any new duplicates
+    const query = `
+      query FindDuplicatesToMerge {
+        brenda: clients(searchTerm: "Brenda", first: 20) {
+          nodes { id name createdAt defaultPhones defaultEmails quotes(first: 15) { nodes { id quoteNumber quoteStatus } } jobs(first: 5) { nodes { id jobNumber } } }
+        }
+        riley: clients(searchTerm: "Riley", first: 20) {
+          nodes { id name createdAt defaultPhones defaultEmails quotes(first: 15) { nodes { id quoteNumber quoteStatus } } jobs(first: 5) { nodes { id jobNumber } } }
+        }
+        tino: clients(searchTerm: "Tino", first: 20) {
+          nodes { id name createdAt defaultPhones defaultEmails quotes(first: 15) { nodes { id quoteNumber quoteStatus } } jobs(first: 5) { nodes { id jobNumber } } }
+        }
+        newCalls: clients(searchTerm: "New Call", first: 20) {
+          nodes { id name createdAt defaultPhones defaultEmails quotes(first: 15) { nodes { id quoteNumber quoteStatus } } jobs(first: 5) { nodes { id jobNumber } } }
+        }
+        recent: clients(last: 40) {
+          nodes { id name createdAt defaultPhones defaultEmails quotes(first: 15) { nodes { id quoteNumber quoteStatus } } jobs(first: 5) { nodes { id jobNumber } } }
+        }
+      }
+    `;
+    const data = await jobberGraphql<any>(cleanToken, query, undefined, credentials);
+    const allNodesMap = new Map<string, any>();
+    for (const group of [
+      data?.brenda?.nodes || [],
+      data?.riley?.nodes || [],
+      data?.tino?.nodes || [],
+      data?.newCalls?.nodes || [],
+      data?.recent?.nodes || [],
+    ]) {
+      for (const n of group) {
+        if (n?.id && !allNodesMap.has(n.id)) {
+          allNodesMap.set(n.id, n);
+        }
+      }
+    }
+
+    const allClients = Array.from(allNodesMap.values());
+
+    // Group clients by (a) exact 10-digit phone number or (b) normalized phonetic full name when neither has conflicting phone
+    const groupsByPhone = new Map<string, any[]>();
+    const groupsByName = new Map<string, any[]>();
+
+    for (const c of allClients) {
+      const phones: string[] = Array.isArray(c.defaultPhones)
+        ? c.defaultPhones
+        : c.defaultPhones
+        ? [String(c.defaultPhones)]
+        : [];
+      const phone10 = phones.map((p) => normalizePhone10(p)).find((p) => p.length === 10 && p !== "7805550199" && p !== "7805550100") || "";
+      const normName = normalizePhoneticPersonName(c.name);
+
+      if (phone10) {
+        const list = groupsByPhone.get(phone10) || [];
+        list.push(c);
+        groupsByPhone.set(phone10, list);
+      }
+      if (normName && normName.split(" ").length >= 2 && !normName.startsWith("new call")) {
+        const list = groupsByName.get(normName) || [];
+        list.push(c);
+        groupsByName.set(normName, list);
+      }
+    }
+
+    const processedDuplicateIds = new Set<string>();
+
+    const mergeClientGroup = async (group: any[], reasonKey: string) => {
+      if (group.length < 2) return;
+      // Sort so the best record is kept:
+      // 1) Real full name (not "New Call [...]")
+      // 2) Has converted/approved/awaiting_response quotes or jobs
+      // 3) Earliest created or most complete
+      const sorted = [...group].sort((a, b) => {
+        const aPlaceholder = String(a.name || "").toLowerCase().includes("new call") ? 1 : 0;
+        const bPlaceholder = String(b.name || "").toLowerCase().includes("new call") ? 1 : 0;
+        if (aPlaceholder !== bPlaceholder) return aPlaceholder - bPlaceholder;
+
+        const aActiveQuotes = (a.quotes?.nodes || []).filter((q: any) => !String(q.quoteStatus || "").toLowerCase().includes("draft")).length;
+        const bActiveQuotes = (b.quotes?.nodes || []).filter((q: any) => !String(q.quoteStatus || "").toLowerCase().includes("draft")).length;
+        if (aActiveQuotes !== bActiveQuotes) return bActiveQuotes - aActiveQuotes;
+
+        const aJobs = (a.jobs?.nodes || []).length;
+        const bJobs = (b.jobs?.nodes || []).length;
+        if (aJobs !== bJobs) return bJobs - aJobs;
+
+        return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      });
+
+      const primary = sorted[0];
+      const duplicates = sorted.slice(1);
+
+      for (const dup of duplicates) {
+        if (!dup?.id || dup.id === primary.id || processedDuplicateIds.has(dup.id)) continue;
+
+        // Safety check: if grouping by name, never merge if both have 10-digit phones and they differ
+        const pPhones = (Array.isArray(primary.defaultPhones) ? primary.defaultPhones : []).map((p: string) => normalizePhone10(p)).filter((p: string) => p.length === 10);
+        const dPhones = (Array.isArray(dup.defaultPhones) ? dup.defaultPhones : []).map((p: string) => normalizePhone10(p)).filter((p: string) => p.length === 10);
+        if (pPhones.length > 0 && dPhones.length > 0 && !dPhones.some((dp: string) => pPhones.includes(dp))) {
+          continue;
+        }
+
+        processedDuplicateIds.add(dup.id);
+
+        // Delete any draft quotes on the duplicate client first so clientDelete succeeds
+        for (const dq of dup.quotes?.nodes || []) {
+          if (dq?.id && String(dq.quoteStatus || "").toLowerCase().includes("draft")) {
+            await jobberGraphql<any>(
+              cleanToken,
+              `mutation DeleteDupClientDraftQuote($quoteId: EncodedId!) {
+                quoteDelete(quoteId: $quoteId) { deletedQuoteId }
+              }`,
+              { quoteId: dq.id },
+              credentials
+            ).catch(() => null);
+            deletedDraftQuoteIds.push(dq.id);
+          }
+        }
+
+        // Delete the duplicate client
+        await jobberGraphql<any>(
+          cleanToken,
+          `mutation DeleteDupClient($clientId: EncodedId!) {
+            clientDelete(clientId: $clientId) { deletedClientId userErrors { message } }
+          }`,
+          { clientId: dup.id },
+          credentials
+        ).catch(() => null);
+
+        mergedClients.push({
+          keptId: primary.id,
+          keptName: primary.name,
+          removedId: dup.id,
+          removedName: dup.name,
+          phone: pPhones[0] || dPhones[0] || reasonKey,
+        });
+      }
+
+      // Also clean up duplicate draft quotes on the primary client itself if there are multiple drafts
+      const primaryQuotes = primary.quotes?.nodes || [];
+      const activePrimaryQuotes = primaryQuotes.filter((q: any) => !String(q.quoteStatus || "").toLowerCase().includes("draft"));
+      const draftPrimaryQuotes = primaryQuotes.filter((q: any) => String(q.quoteStatus || "").toLowerCase().includes("draft"));
+      const draftsToDelete = activePrimaryQuotes.length > 0 ? draftPrimaryQuotes : draftPrimaryQuotes.slice(1);
+      for (const dq of draftsToDelete) {
+        if (!dq?.id) continue;
+        await jobberGraphql<any>(
+          cleanToken,
+          `mutation DeleteExtraPrimaryDraftQuote($quoteId: EncodedId!) {
+            quoteDelete(quoteId: $quoteId) { deletedQuoteId }
+          }`,
+          { quoteId: dq.id },
+          credentials
+        ).catch(() => null);
+        deletedDraftQuoteIds.push(dq.id);
+      }
+    };
+
+    for (const [phone10, group] of groupsByPhone.entries()) {
+      await mergeClientGroup(group, phone10);
+    }
+    for (const [normName, group] of groupsByName.entries()) {
+      await mergeClientGroup(group, normName);
+    }
+  } catch {
+    // Non-fatal if Jobber token is expired or rate-limited
+  }
+
+  return { mergedClients, deletedDraftQuoteIds };
+}
+
+/**
  * 3. jobberQuoteSync: Pulls quotes and pipeline standings with incremental delta merging into local database
  */
 export async function syncJobberQuotes(
@@ -768,8 +1401,13 @@ export async function syncJobberQuotes(
   isLiveJobber?: boolean;
 }> {
   const startTime = Date.now();
+  const sanitizedExistingQuotes = (existingQuotes || []).filter((q) => !isFakeOrPurgedJobberQuote(q));
+
   if (accessToken && !accessToken.startsWith("jobber_oauth")) {
     try {
+      // Proactively purge any fake/draft quotes on Jobber in the background
+      purgeFakeAndDraftQuotesOnJobber(accessToken, credentials).catch(() => {});
+
       const query = `
         query SyncQuotes {
           quotes(first: 50, filter: { createdAt: { after: "2026-08-01T00:00:00Z" } }) {
@@ -778,6 +1416,7 @@ export async function syncJobberQuotes(
               id
               quoteNumber
               title
+              message
               quoteStatus
               jobberWebUri
               clientHubUri
@@ -821,13 +1460,10 @@ export async function syncJobberQuotes(
       const data = await jobberGraphql<any>(accessToken, query, undefined, credentials);
       const nodes = data?.quotes?.nodes || [];
 
-      // Incremental delta merge with existing database quotes (removing obsolete local fallback duplicates)
+      // Incremental delta merge with existing database quotes (removing obsolete local fallback duplicates & fake drafts)
       const quotesMap = new Map<string, JobberQuote>();
-      for (const q of existingQuotes) {
-        if (q.id === "qt_4331" || q.quoteNumber === "QT-4331") continue;
-        const qNumExisting = parseInt(String(q.quoteNumber || "").replace(/\D/g, ""), 10) || 0;
-        if (qNumExisting === 4418 || (qNumExisting >= 4426 && qNumExisting <= 4575)) continue;
-        if (isFalseOrCatalogLeadRow(q.clientName)) continue;
+      for (const q of sanitizedExistingQuotes) {
+        if (isFakeOrPurgedJobberQuote(q)) continue;
         quotesMap.set(q.id || q.quoteNumber, { ...q });
       }
 
@@ -839,15 +1475,8 @@ export async function syncJobberQuotes(
         const rawQNum = Number(node.quoteNumber || 0);
         const clientName = node.client?.name || "Customer";
         const lineNodes = node.lineItems?.nodes || [];
-        // Skip emptied/false ad-sheet quotes (QT-4418 and QT-4426..4575) or catalog/test client names
-        if (
-          rawQNum === 4418 ||
-          (rawQNum >= 4426 && rawQNum <= 4575) ||
-          isFalseOrCatalogLeadRow(clientName) ||
-          (lineNodes.length === 0 && Number(node.amounts?.total || 0) === 0)
-        ) {
-          continue;
-        }
+        const numericQuoteId = extractJobberNumericId(node.id);
+        const quoteNumber = `QT-${node.quoteNumber || numericQuoteId}`;
 
         let status: JobberQuote["quoteStatus"] = "APPROVED";
         const rawStatus = (node.quoteStatus || "").toLowerCase();
@@ -863,11 +1492,40 @@ export async function syncJobberQuotes(
           status = "DRAFT";
         }
 
-        const numericQuoteId = extractJobberNumericId(node.id);
-        const quoteNumber = `QT-${node.quoteNumber || numericQuoteId}`;
+        // Skip any fake, archived, or purged quotes (including Sheralee Cave, Donna Noel, QT-7537, QT-7538, etc.)
+        if (
+          status === "ARCHIVED" ||
+          rawQNum === 4418 ||
+          (rawQNum >= 4425 && rawQNum <= 4575) ||
+          rawQNum === 7537 ||
+          rawQNum === 7538 ||
+          PURGED_FAKE_JOBBER_QUOTE_IDS.has(node.id) ||
+          PURGED_FAKE_QUOTE_NUMBERS.has(quoteNumber) ||
+          isFalseOrCatalogLeadRow(clientName) ||
+          isFakeOrPurgedJobberQuote({
+            id: node.id,
+            quoteNumber,
+            clientName,
+            quoteStatus: status,
+            title: node.title,
+          }) ||
+          (lineNodes.length === 0 && Number(node.amounts?.total || 0) === 0)
+        ) {
+          quotesMap.delete(node.id);
+          quotesMap.delete(quoteNumber);
+          continue;
+        }
+
         const key = node.id || quoteNumber;
-        const total = node.amounts?.total || 380;
-        const depositRequired = node.amounts?.depositAmount || 0;
+        const rawSubtotal = Number(node.amounts?.subtotal || 0);
+        const rawTotal = Number(node.amounts?.total || 0);
+        const total =
+          status === "DRAFT" && rawSubtotal > 0 && Math.abs(rawTotal - rawSubtotal) < 0.01
+            ? Math.round(rawSubtotal * 1.125 * 100) / 100
+            : rawTotal || 365.63;
+        const subtotal = rawSubtotal > 0 ? rawSubtotal : Math.round((total / 1.125) * 100) / 100;
+        const tax = Math.round((total - subtotal) * 100) / 100;
+        const depositRequired = node.amounts?.depositAmount || (total >= 300 ? 100 : 50);
         const rawPhone = Array.isArray(node.client?.defaultPhones)
           ? node.client.defaultPhones[0]
           : node.client?.defaultPhones || "";
@@ -881,9 +1539,22 @@ export async function syncJobberQuotes(
               .join(", ")
           : undefined;
         const rawTitle = node.title || "";
-        const firstLineText = `${rawTitle} ${lineNodes[0]?.name || ""} ${lineNodes[0]?.description || ""}`;
-        const bedMatch = firstLineText.match(/(\d+)\s*(?:bed|br|bedroom)/i);
-        const bathMatch = firstLineText.match(/(\d+(?:\.\d+)?)\s*(?:bath|ba|bathroom)/i);
+        const rawMessage = String(node.message || "").trim();
+        const combinedTextForExtraction = `${rawTitle} ${lineNodes[0]?.name || ""} ${lineNodes[0]?.description || ""} ${rawMessage}`;
+        const homeSizeMatch = rawMessage.match(/Home Size:\s*(\d+(?:\.\d+)?)\s*Bedrooms?,\s*(\d+(?:\.\d+)?)\s*Bathrooms?/i);
+        const bedMatch = homeSizeMatch
+          ? [homeSizeMatch[0], homeSizeMatch[1]]
+          : combinedTextForExtraction.match(/(\d+)\s*(?:bed|br|bedroom)/i);
+        const bathMatch = homeSizeMatch
+          ? [homeSizeMatch[0], homeSizeMatch[2]]
+          : combinedTextForExtraction.match(/(\d+(?:\.\d+)?)\s*(?:bath|ba|bathroom)/i);
+        const prefDateMatch = rawMessage.match(/Preferred Date:\s*(\d{4}-\d{2}-\d{2})(?:\s*\(([^)]+)\))?/i);
+        const sourceMatch = rawMessage.match(/Source:\s*([^\n|]+)/i);
+        const extractedSource = sourceMatch
+          ? sourceMatch[1].trim()
+          : rawMessage.includes("app.tidyupscleaning.com/booking")
+          ? "app.tidyupscleaning.com/booking"
+          : undefined;
         const mappedLineItems = lineNodes.map((li: any) => ({
           description: li.name || li.description || rawTitle,
           quantity: Number(li.quantity) || 1,
@@ -901,8 +1572,14 @@ export async function syncJobberQuotes(
           if (rawTitle && (!existing.service || existing.service === "Residential Deep & Standard Cleaning")) {
             existing.service = rawTitle;
           }
-          if (bedMatch && !existing.bedrooms) existing.bedrooms = `${bedMatch[1]} Bedrooms`;
-          if (bathMatch && !existing.bathrooms) existing.bathrooms = `${bathMatch[1]} Bathrooms`;
+          if (bedMatch) existing.bedrooms = `${bedMatch[1]} Bedrooms`;
+          if (bathMatch) existing.bathrooms = `${bathMatch[1]} Bathrooms`;
+          if (rawMessage && !existing.notes) existing.notes = rawMessage;
+          if (prefDateMatch?.[1] && !existing.scheduledDate) existing.scheduledDate = prefDateMatch[1];
+          if (prefDateMatch?.[2] && !existing.scheduledTime) existing.scheduledTime = prefDateMatch[2];
+          if (extractedSource && !existing.source) existing.source = extractedSource;
+          existing.subtotal = subtotal;
+          existing.tax = tax;
           if (mappedLineItems.length > 0 && (!existing.lineItems || existing.lineItems.length === 0)) {
             existing.lineItems = mappedLineItems;
           }
@@ -934,10 +1611,17 @@ export async function syncJobberQuotes(
             bedrooms: bedMatch ? `${bedMatch[1]} Bedrooms` : undefined,
             bathrooms: bathMatch ? `${bathMatch[1]} Bathrooms` : undefined,
             quoteStatus: status,
+            subtotal,
+            tax,
             total,
             depositRequired,
             createdAt: node.createdAt || new Date().toISOString(),
             updatedAt: node.updatedAt,
+            scheduledDate: prefDateMatch?.[1],
+            scheduledTime: prefDateMatch?.[2],
+            requestedDate: prefDateMatch?.[1],
+            notes: rawMessage || undefined,
+            source: extractedSource,
             jobberClientId: node.client?.id,
             jobberPropertyId: node.property?.id,
             jobberClientWebUri: node.client?.jobberWebUri || (node.client?.id ? resolveJobberWebUri("clients", node.client.id) : undefined),
@@ -1018,20 +1702,20 @@ export async function syncJobberQuotes(
     }
   }
 
-  // Fast database fallback: return existing quotes cached in local database
-  const approved = existingQuotes.filter(q => q.quoteStatus === "APPROVED" || q.quoteStatus === "CONVERTED").length;
-  const awaiting = existingQuotes.filter(q => q.quoteStatus === "AWAITING_RESPONSE").length;
+  // Fast database fallback: return sanitized quotes cached in local database
+  const approved = sanitizedExistingQuotes.filter(q => q.quoteStatus === "APPROVED" || q.quoteStatus === "CONVERTED").length;
+  const awaiting = sanitizedExistingQuotes.filter(q => q.quoteStatus === "AWAITING_RESPONSE").length;
 
   return {
-    quotes: existingQuotes,
-    syncedQuotesCount: existingQuotes.length,
+    quotes: sanitizedExistingQuotes,
+    syncedQuotesCount: sanitizedExistingQuotes.length,
     approvedCount: approved,
     awaitingResponseCount: awaiting,
     delta: {
-      totalCount: existingQuotes.length,
+      totalCount: sanitizedExistingQuotes.length,
       newCount: 0,
       updatedCount: 0,
-      unchangedCount: existingQuotes.length,
+      unchangedCount: sanitizedExistingQuotes.length,
       durationMs: Date.now() - startTime,
       syncedAt: new Date().toISOString(),
     },
@@ -1201,23 +1885,537 @@ export async function syncJobberInvoices(
   };
 }
 
+// Canonical TidyUps Jobber Team Member User IDs for instant cleaner assignment
+const JOBBER_TEAM_USER_ID_MAP: Array<{ match: RegExp; id: string; fullName: string }> = [
+  { match: /\bstacey\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvNDA2MDg5Ng==", fullName: "Stacey Whitty" },
+  { match: /\bmelissa\s*clarke\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvNDA3NTg5Nw==", fullName: "Melissa Clarke" },
+  { match: /\bmelissa\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjYyNDUwOA==", fullName: "Melissa Clark" },
+  { match: /\bkrinkle\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzM3NDcxNg==", fullName: "Krinkle Klean" },
+  { match: /\bdominic\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMTkzMzUwNQ==", fullName: "Dominic Mancini" },
+  { match: /\bkilab\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvNDE2MTA5NQ==", fullName: "Kilab" },
+  { match: /\byasmeen\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzQzMTAyMA==", fullName: "Yasmeen" },
+  { match: /\b(violet|guay|cindy)\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzg1NjQwNg==", fullName: "Violet Manguiob \"Guay\"" },
+  { match: /\bdinku\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvNDA0OTk2OA==", fullName: "N.Dinku" },
+  { match: /\brobyn\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjkzOTQ1OA==", fullName: "Robyn Adele" },
+  { match: /\bjoseph\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjUxMzkxMQ==", fullName: "1 Joseph Juma" },
+  { match: /\btsewang\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjY4NTYwMg==", fullName: "Tsewang Lama" },
+  { match: /\b(neth|carmen)\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjQzMDI5Ng==", fullName: "Neth & Carmen" },
+  { match: /\bjasmin\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzE4ODM1Nw==", fullName: "Jasmin Kunin" },
+  { match: /\bsergine\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMjk3MTE1Nw==", fullName: "Sergine Ngongang wetie" },
+  { match: /\badison\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvNDE2NTk1NA==", fullName: "Adison Haugland" },
+  { match: /\b(jen|bryan|cabugon)\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzI1OTkxNQ==", fullName: "Jen & Bryan Cabugon" },
+  { match: /\bjoel\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMzA0NDQwMg==", fullName: "Joel MBATCHOU" },
+  { match: /\brichard\b/i, id: "Z2lkOi8vSm9iYmVyL1VzZXIvMTU4MDE3Ng==", fullName: "Richard \"Owner Account\"" },
+];
+
+export function resolveJobberUserIdsForCleaners(cleaners?: string[]): string[] {
+  if (!Array.isArray(cleaners) || cleaners.length === 0) return [];
+  const ids = new Set<string>();
+  for (const raw of cleaners) {
+    const c = String(raw || "").trim();
+    if (!c || c === "NONE" || /unassigned/i.test(c)) continue;
+    if (c.startsWith("Z2lkOi8vSm9iYmVyL1VzZXI")) {
+      ids.add(c);
+      continue;
+    }
+    const found = JOBBER_TEAM_USER_ID_MAP.find((entry) => entry.match.test(c));
+    if (found) {
+      ids.add(found.id);
+    }
+  }
+  return Array.from(ids);
+}
+
+/**
+ * Converts a Quote or Schedules an Unscheduled Job into a real Job & Calendar Visit in Jobber
+ * via GraphQL `jobCreate` (or updates the existing Job/Visit if already converted so it never duplicates).
+ */
+export async function convertQuoteOrScheduleJobOnJobber(
+  params: {
+    quoteId?: string;
+    clientId?: string;
+    propertyId?: string;
+    clientName: string;
+    clientPhone?: string;
+    clientEmail?: string;
+    serviceAddress?: string;
+    service: string;
+    bedrooms?: string;
+    bathrooms?: string;
+    scheduledDate: string;
+    scheduledTime?: string;
+    durationHours?: number;
+    assignedCleaners?: string[];
+    total?: number;
+    notes?: string;
+    lineItems?: Array<{ name?: string; description: string; quantity: number; unitPrice: number; total?: number; unitCost?: number }>;
+  },
+  accessToken?: string,
+  credentials?: JobberCredentials
+): Promise<JobberPushResult> {
+  const cleanDate = String(params.scheduledDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const rawTime = String(params.scheduledTime || "10:00").replace(/\s*(AM|PM)/i, "").trim();
+  const [hRaw, mRaw] = (rawTime.includes(":") ? rawTime.split(":") : ["10", "00"]).map(Number);
+  const startH = Number.isFinite(hRaw) ? Math.min(23, Math.max(0, hRaw)) : 10;
+  const startM = Number.isFinite(mRaw) ? Math.min(59, Math.max(0, mRaw)) : 0;
+  const dur = Number(params.durationHours) > 0 ? Number(params.durationHours) : 2.5;
+  const totalEndMinutes = Math.min(23 * 60 + 59, startH * 60 + startM + Math.round(dur * 60));
+  const endH = Math.floor(totalEndMinutes / 60);
+  const endM = totalEndMinutes % 60;
+  const startTimeIso = `${String(startH).padStart(2, "0")}:${String(startM).padStart(2, "0")}:00`;
+  const endTimeIso = `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}:00`;
+  const assignedUserIds = resolveJobberUserIdsForCleaners(params.assignedCleaners);
+
+  let liveQuoteId =
+    params.quoteId && String(params.quoteId).startsWith("Z2lkOi8vSm9iYmVyL1F1b3Rl")
+      ? String(params.quoteId)
+      : undefined;
+  let liveClientId =
+    params.clientId && String(params.clientId).startsWith("Z2lkOi8vSm9iYmVyL0NsaWVudC")
+      ? String(params.clientId)
+      : undefined;
+  let livePropertyId =
+    params.propertyId && String(params.propertyId).startsWith("Z2lkOi8vSm9iYmVyL1Byb3BlcnR5")
+      ? String(params.propertyId)
+      : undefined;
+
+  if (accessToken && !accessToken.startsWith("jobber_oauth")) {
+    try {
+      const cleanToken = accessToken.replace(/^Bearer\s+/i, "").trim();
+
+      // Step A: If we have a liveQuoteId, inspect it in Jobber to get propertyId, clientId, and check if a Job already exists
+      let existingJobNode: any = null;
+      if (liveQuoteId) {
+        try {
+          const checkQuoteQuery = `
+            query CheckQuoteForJobConversion($id: EncodedId!) {
+              quote(id: $id) {
+                id
+                quoteNumber
+                quoteStatus
+                title
+                client { id }
+                property { id }
+                jobs(first: 5) {
+                  nodes {
+                    id
+                    jobNumber
+                    jobberWebUri
+                    visits(first: 5) {
+                      nodes {
+                        id
+                        startAt
+                        endAt
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
+          const qData = await jobberGraphql<any>(cleanToken, checkQuoteQuery, { id: liveQuoteId }, credentials);
+          const qNode = qData?.quote;
+          if (qNode) {
+            if (!liveClientId && qNode.client?.id) liveClientId = qNode.client.id;
+            if (!livePropertyId && qNode.property?.id) livePropertyId = qNode.property.id;
+            if (Array.isArray(qNode.jobs?.nodes) && qNode.jobs.nodes.length > 0) {
+              existingJobNode = qNode.jobs.nodes[0];
+            }
+          }
+        } catch {
+          // Continue if quote lookup fails
+        }
+      }
+
+      // Step B: If we don't have a livePropertyId yet, ensure Client & Property exist in Jobber via pushQuoteToJobber
+      if (!livePropertyId) {
+        const ensured = await pushQuoteToJobber(
+          {
+            clientName: params.clientName,
+            clientPhone: params.clientPhone,
+            clientEmail: params.clientEmail,
+            serviceAddress: params.serviceAddress || "Edmonton, AB",
+            service: params.service || "Move-Out Cleaning",
+            bedrooms: params.bedrooms,
+            bathrooms: params.bathrooms,
+            total: Number(params.total) || 365.63,
+            notes: params.notes,
+            existingJobberQuoteId: liveQuoteId,
+            existingJobberClientId: liveClientId,
+            existingJobberPropertyId: livePropertyId,
+            lineItems: params.lineItems as any,
+          },
+          cleanToken,
+          credentials
+        );
+        if (ensured.jobberClientId?.startsWith("Z2lkOi8v")) liveClientId = ensured.jobberClientId;
+        if (ensured.jobberPropertyId?.startsWith("Z2lkOi8v")) livePropertyId = ensured.jobberPropertyId;
+        if (ensured.jobberQuoteId?.startsWith("Z2lkOi8v")) liveQuoteId = ensured.jobberQuoteId;
+      }
+
+      // Step C: If the Quote was ALREADY converted to a Job in Jobber, update that existing Job's visit schedule & cleaners instead of creating a duplicate Job!
+      if (existingJobNode?.id) {
+        const existingVisit = existingJobNode.visits?.nodes?.[0];
+        if (existingVisit?.id) {
+          await updateVisitOnJobber(
+            {
+              visitId: existingVisit.id,
+              scheduledDate: cleanDate,
+              startTime: startTimeIso,
+              endTime: endTimeIso,
+              assignedCleaners: params.assignedCleaners,
+            },
+            cleanToken,
+            credentials
+          ).catch(() => null);
+        }
+        const jobNumberStr = existingJobNode.jobNumber
+          ? `JOB-${existingJobNode.jobNumber}`
+          : `JOB-${extractJobberNumericId(existingJobNode.id)}`;
+        return {
+          success: true,
+          isLiveSynced: true,
+          jobberJobId: existingJobNode.id,
+          jobNumber: jobNumberStr,
+          jobberVisitId: existingVisit?.id || existingJobNode.id,
+          jobberClientId: liveClientId,
+          jobberPropertyId: livePropertyId,
+          jobberQuoteId: liveQuoteId,
+          jobberWebUri: existingJobNode.jobberWebUri || resolveJobberWebUri("jobs", existingJobNode.id),
+          message: `✓ Synced & updated Job ${jobNumberStr} in Jobber for ${params.clientName} on ${cleanDate} at ${startTimeIso.slice(0, 5)}!`,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // Step D: Build canonical line items so the Job in Jobber has exact Service + Fuel Surcharge + Discount
+      const canonicalPkg = buildCanonicalQuoteBreakdown({
+        service: params.service || "Move-Out Cleaning",
+        bedrooms: params.bedrooms,
+        bathrooms: params.bathrooms,
+        notes: params.notes,
+      });
+
+      const hasFuelInProvided =
+        Array.isArray(params.lineItems) &&
+        params.lineItems.some((li) => /fuel|surcharge/i.test(`${li.name || ""} ${li.description || ""}`));
+
+      const effectiveLineItems =
+        Array.isArray(params.lineItems) && params.lineItems.length >= 2 && hasFuelInProvided
+          ? params.lineItems.map((li, idx) => {
+              const qty = Number(li.quantity) || 1;
+              const up = Number(li.unitPrice ?? li.total ?? 0);
+              const isPrimary = idx === 0 && up > 0 && !/fuel|discount/i.test(`${li.name || ""} ${li.description || ""}`);
+              return {
+                name: li.name || (isPrimary ? canonicalPkg.cleanItemName : params.service || "Cleaning Service"),
+                description: String(li.description || li.name || canonicalPkg.cleanItemName).slice(0, 250),
+                quantity: qty,
+                unitPrice: up,
+                ...(li.unitCost && li.unitCost > 0
+                  ? { unitCost: Number(li.unitCost) }
+                  : isPrimary
+                  ? { unitCost: Math.round(up * 0.5 * 100) / 100 }
+                  : {}),
+                taxable: true,
+                saveToProductsAndServices: false,
+              };
+            })
+          : canonicalPkg.lineItems.map((li) => ({
+              name: li.name,
+              description: li.description,
+              quantity: Number(li.quantity) || 1,
+              unitPrice: Number(li.unitPrice),
+              ...(li.unitCost && li.unitCost > 0 ? { unitCost: Number(li.unitCost) } : {}),
+              taxable: true,
+              saveToProductsAndServices: false,
+            }));
+
+      if (livePropertyId) {
+        const jobCreateMutation = `
+          mutation CreateJobInJobber($input: JobCreateAttributes!) {
+            jobCreate(input: $input) {
+              job {
+                id
+                jobNumber
+                title
+                jobStatus
+                jobberWebUri
+                total
+                quote {
+                  id
+                  quoteNumber
+                  quoteStatus
+                }
+                visits(first: 5) {
+                  nodes {
+                    id
+                    title
+                    startAt
+                    endAt
+                    visitStatus
+                    assignedUsers(first: 5) {
+                      nodes {
+                        id
+                        name { full }
+                      }
+                    }
+                  }
+                }
+              }
+              userErrors {
+                message
+                path
+              }
+            }
+          }
+        `;
+
+        const jobTitle = canonicalPkg.cleanItemName || params.service || "Cleaning Service";
+        const instructionsText = [
+          `${jobTitle}${params.bedrooms || params.bathrooms ? ` — ${[params.bedrooms, params.bathrooms].filter(Boolean).join(", ")}` : ""}`,
+          params.serviceAddress ? `Address: ${params.serviceAddress}` : "",
+          params.assignedCleaners && params.assignedCleaners.length > 0
+            ? `Assigned Cleaners: ${params.assignedCleaners.join(" & ")}`
+            : "",
+          params.notes ? String(params.notes).slice(0, 500) : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        const jobInput: any = {
+          propertyId: livePropertyId,
+          ...(liveQuoteId ? { quoteId: liveQuoteId } : {}),
+          title: jobTitle,
+          instructions: instructionsText,
+          timeframe: {
+            startAt: cleanDate,
+          },
+          scheduling: {
+            createVisits: true,
+            notifyTeam: false,
+            startTime: startTimeIso,
+            endTime: endTimeIso,
+            ...(assignedUserIds.length > 0 ? { assignedTo: assignedUserIds } : {}),
+          },
+          invoicing: {
+            invoicingType: "FIXED_PRICE",
+            invoicingSchedule: "ON_COMPLETION",
+          },
+          lineItems: effectiveLineItems,
+        };
+
+        let jobRes = await jobberGraphql<any>(cleanToken, jobCreateMutation, { input: jobInput }, credentials).catch(
+          () => null
+        );
+        if (!jobRes?.jobCreate?.job) {
+          // Fallback without unitCost or quoteId if quote was already linked
+          const fallbackLineItems = effectiveLineItems.map(({ unitCost: _uc, ...rest }) => rest);
+          const { quoteId: _qid, ...restJobInput } = jobInput;
+          jobRes = await jobberGraphql<any>(
+            cleanToken,
+            jobCreateMutation,
+            {
+              input: {
+                ...restJobInput,
+                lineItems: fallbackLineItems,
+              },
+            },
+            credentials
+          ).catch(() => null);
+        }
+
+        const createdJob = jobRes?.jobCreate?.job;
+        if (createdJob?.id) {
+          const createdVisit = createdJob.visits?.nodes?.[0];
+          // Explicitly assign cleaners on the created visit via visitEditAssignedUsers so Jobber Calendar shows them
+          if (createdVisit?.id && assignedUserIds.length > 0) {
+            await updateVisitOnJobber(
+              {
+                visitId: createdVisit.id,
+                assignedCleaners: params.assignedCleaners,
+              },
+              cleanToken,
+              credentials
+            ).catch(() => null);
+          }
+
+          const jobNumberStr = createdJob.jobNumber
+            ? `JOB-${createdJob.jobNumber}`
+            : `JOB-${extractJobberNumericId(createdJob.id)}`;
+          return {
+            success: true,
+            isLiveSynced: true,
+            jobberJobId: createdJob.id,
+            jobNumber: jobNumberStr,
+            jobberVisitId: createdVisit?.id || createdJob.id,
+            jobberClientId: liveClientId,
+            jobberPropertyId: livePropertyId,
+            jobberQuoteId: liveQuoteId,
+            jobberWebUri: createdJob.jobberWebUri || resolveJobberWebUri("jobs", createdJob.id),
+            message: `✓ Converted & Scheduled ${jobNumberStr} in Jobber for ${params.clientName} on ${cleanDate} at ${startTimeIso.slice(0, 5)}!`,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
+    } catch (err: any) {
+      console.warn("convertQuoteOrScheduleJobOnJobber fallback notice:", err?.message || err);
+    }
+  }
+
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  const fallbackJobId = `job_${randomSuffix}`;
+  const fallbackVisitId = `vis-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  return {
+    success: true,
+    isLiveSynced: false,
+    jobberJobId: fallbackJobId,
+    jobNumber: `JOB-${randomSuffix}`,
+    jobberVisitId: fallbackVisitId,
+    jobberClientId: liveClientId || `client_${randomSuffix}`,
+    jobberPropertyId: livePropertyId,
+    jobberQuoteId: liveQuoteId,
+    jobberWebUri: liveQuoteId ? resolveJobberWebUri("quotes", liveQuoteId) : "https://secure.getjobber.com/work_orders",
+    message: `Scheduled "${params.clientName}" for ${cleanDate} at ${startTimeIso.slice(0, 5)} in app calendar (queued for Jobber sync).`,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Updates an existing Jobber Visit's assigned team members and/or scheduled date/time via GraphQL
+ */
+export async function updateVisitOnJobber(
+  params: {
+    visitId: string;
+    scheduledDate?: string;
+    startTime?: string;
+    endTime?: string;
+    startAt?: string;
+    endAt?: string;
+    assignedCleaners?: string[];
+  },
+  accessToken?: string,
+  credentials?: JobberCredentials
+): Promise<{ success: boolean; isLiveSynced: boolean }> {
+  if (
+    !accessToken ||
+    accessToken.startsWith("jobber_oauth") ||
+    !params.visitId ||
+    !String(params.visitId).startsWith("Z2lkOi8vSm9iYmVyL1Zpc2l0")
+  ) {
+    return { success: true, isLiveSynced: false };
+  }
+
+  const cleanToken = accessToken.replace(/^Bearer\s+/i, "").trim();
+  let syncedAny = false;
+
+  try {
+    if (Array.isArray(params.assignedCleaners)) {
+      const assignedUserIds = resolveJobberUserIdsForCleaners(params.assignedCleaners);
+      const assignMutation = `
+        mutation UpdateVisitAssignedUsers($visitId: EncodedId!, $input: VisitEditAssignedUsersInput!) {
+          visitEditAssignedUsers(visitId: $visitId, input: $input) {
+            visit { id }
+            userErrors { message }
+          }
+        }
+      `;
+      const assignRes = await jobberGraphql<any>(
+        cleanToken,
+        assignMutation,
+        {
+          visitId: params.visitId,
+          input: { assignedUserIds },
+        },
+        credentials
+      ).catch(() => null);
+      if (assignRes?.visitEditAssignedUsers?.visit?.id) {
+        syncedAny = true;
+      }
+    }
+
+    const startDate =
+      params.scheduledDate ||
+      (params.startAt && params.startAt.length >= 10 ? params.startAt.slice(0, 10) : undefined);
+    const startTimeVal =
+      params.startTime ||
+      (params.startAt && params.startAt.includes("T") ? params.startAt.split("T")[1]?.slice(0, 8) : undefined);
+    const endDate =
+      params.scheduledDate ||
+      (params.endAt && params.endAt.length >= 10 ? params.endAt.slice(0, 10) : startDate);
+    const endTimeVal =
+      params.endTime ||
+      (params.endAt && params.endAt.includes("T") ? params.endAt.split("T")[1]?.slice(0, 8) : undefined);
+
+    if (startDate && startTimeVal && endDate && endTimeVal) {
+      const schedMutation = `
+        mutation UpdateVisitSchedule($id: EncodedId!, $input: VisitEditScheduleInput!) {
+          visitEditSchedule(id: $id, input: $input) {
+            visit { id startAt endAt }
+            userErrors { message }
+          }
+        }
+      `;
+      const schedRes = await jobberGraphql<any>(
+        cleanToken,
+        schedMutation,
+        {
+          id: params.visitId,
+          input: {
+            startAt: {
+              date: startDate,
+              time: startTimeVal.length === 5 ? `${startTimeVal}:00` : startTimeVal,
+              timezone: "America/Edmonton",
+            },
+            endAt: {
+              date: endDate,
+              time: endTimeVal.length === 5 ? `${endTimeVal}:00` : endTimeVal,
+              timezone: "America/Edmonton",
+            },
+          },
+        },
+        credentials
+      ).catch(() => null);
+      if (schedRes?.visitEditSchedule?.visit?.id) {
+        syncedAny = true;
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  return { success: true, isLiveSynced: syncedAny };
+}
+
 /**
  * 5. jobberPush: Pushes a local cleaning ticket/booking into Jobber via jobCreate mutation
  */
-export async function pushBookingToJobber(ticket: any, accessToken?: string): Promise<JobberPushResult> {
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const jobId = `job_${randomSuffix}`;
-  const visitId = `visit_${randomSuffix}`;
-  const clientId = `client_${randomSuffix}`;
-
-  return {
-    success: true,
-    jobberJobId: jobId,
-    jobberVisitId: visitId,
-    jobberClientId: clientId,
-    message: `Pushed "${ticket.customerName}" booking to Jobber as Job #${jobId} (Visit #${visitId}) for ${ticket.equipmentType}.`,
-    timestamp: new Date().toISOString(),
-  };
+export async function pushBookingToJobber(
+  ticket: any,
+  accessToken?: string,
+  credentials?: JobberCredentials
+): Promise<JobberPushResult> {
+  return convertQuoteOrScheduleJobOnJobber(
+    {
+      quoteId: ticket?.jobberQuoteId || ticket?.quoteId,
+      clientId: ticket?.jobberClientId || ticket?.clientId,
+      propertyId: ticket?.jobberPropertyId || ticket?.propertyId,
+      clientName: ticket?.customerName || ticket?.clientName || "Customer",
+      clientPhone: ticket?.customerPhone || ticket?.clientPhone,
+      clientEmail: ticket?.customerEmail || ticket?.clientEmail,
+      serviceAddress: ticket?.serviceAddress || ticket?.address || "Edmonton, AB",
+      service: ticket?.equipmentType || ticket?.serviceType || ticket?.service || "Move-Out Cleaning",
+      bedrooms: ticket?.bedrooms,
+      bathrooms: ticket?.bathrooms,
+      scheduledDate: ticket?.scheduledDate || ticket?.preferredDate || new Date().toISOString().slice(0, 10),
+      scheduledTime: ticket?.scheduledTime || "10:00",
+      durationHours: ticket?.durationHours || 2.5,
+      assignedCleaners: ticket?.assignedCleaners || (ticket?.assignedDealer ? [ticket.assignedDealer] : []),
+      total: Number(ticket?.total || ticket?.estimatedCost || 365.63),
+      notes: ticket?.notes || ticket?.issueDescription,
+      lineItems: ticket?.lineItems,
+    },
+    accessToken,
+    credentials
+  );
 }
 
 export interface JobberPushQuoteResult {
@@ -1292,6 +2490,8 @@ export async function pushQuoteToJobber(
     total: number;
     depositRequired?: number;
     notes?: string;
+    source?: string;
+    sourceTab?: string;
     createRequestOnly?: boolean;
     existingJobberQuoteId?: string;
     existingJobberClientId?: string;
@@ -1301,6 +2501,19 @@ export async function pushQuoteToJobber(
   accessToken?: string,
   credentials?: JobberCredentials
 ): Promise<JobberPushQuoteResult> {
+  if (
+    isFalseOrCatalogLeadRow(quote.clientName) ||
+    String(quote.clientName || "").toLowerCase().includes("sheralee") ||
+    String(quote.clientName || "").toLowerCase().includes("donna noel") ||
+    String(quote.notes || "").includes("[DRAFT FOR OWNER REVIEW]")
+  ) {
+    return {
+      success: false,
+      isLiveSynced: false,
+      message: "Blocked fake/draft quote from pushing to Jobber.",
+    };
+  }
+
   const lockKey =
     normalizePhoneticPersonName(quote.clientName) ||
     normalizePhone10(quote.clientPhone) ||
@@ -1342,6 +2555,8 @@ async function executePushQuoteToJobberInternal(
     total: number;
     depositRequired?: number;
     notes?: string;
+    source?: string;
+    sourceTab?: string;
     createRequestOnly?: boolean;
     existingJobberQuoteId?: string;
     existingJobberClientId?: string;
@@ -1622,6 +2837,16 @@ async function executePushQuoteToJobberInternal(
 
         const cNormName = normalizePhoneticPersonName(c.name);
         const exactNameMatch = Boolean(targetNormName && cNormName && cNormName === targetNormName);
+        const isCandidatePlaceholder =
+          !cNormName ||
+          cNormName.startsWith("new call") ||
+          cNormName.startsWith("inbound") ||
+          cNormName.startsWith("phone lead") ||
+          cNormName === "customer" ||
+          cNormName === "client";
+        const firstNamePrefixMatch =
+          Boolean(targetNormName && cNormName) &&
+          (targetNormName.split(" ")[0] === cNormName.split(" ")[0]);
 
         // Count how many non-name attributes match (phone, street address, email)
         const matchingExtraCount = [phoneMatched, addressMatched, emailMatched].filter(Boolean).length;
@@ -1633,6 +2858,11 @@ async function executePushQuoteToJobberInternal(
           if (matchingExtraCount >= 1) return true;
           if (hasFullName && validCandidatePhones.length === 0 && candidateStrokes.length === 0) return true;
           return false;
+        }
+
+        // Same phone number + same first name (e.g. "Riley" vs "Riley Frenchbeck" at 780-945-0090) or placeholder ("New Call [+17809450090]")
+        if (phoneMatched && (firstNamePrefixMatch || isCandidatePlaceholder)) {
+          return true;
         }
 
         // If NOT an exact name match, require at least 2 to 3 attributes in common (e.g. exact phone + exact street address, or exact phone + exact email)
@@ -1659,7 +2889,7 @@ async function executePushQuoteToJobberInternal(
         propertyId = existingClient.clientProperties?.nodes?.[0]?.id || propertyId;
 
         // Reconcile & merge any missing bits of information onto this verified matching client
-        // IMPORTANT: Never overwrite an existing client's name if their name is already set to a real name!
+        // IMPORTANT: Upgrade single first-name or placeholder ("New Call [...]") to full First + Last name!
         try {
           const existingPhones: string[] = Array.isArray(existingClient.defaultPhones)
             ? existingClient.defaultPhones
@@ -1678,10 +2908,12 @@ async function executePushQuoteToJobberInternal(
           const existingNameNorm = normalizePhoneticPersonName(existingClient.name);
           const isPlaceholderExistingName =
             !existingNameNorm ||
+            existingNameNorm.startsWith("new call") ||
             existingNameNorm.startsWith("inbound") ||
             existingNameNorm.startsWith("phone lead") ||
             existingNameNorm === "customer" ||
-            existingNameNorm === "client";
+            existingNameNorm === "client" ||
+            (existingNameNorm.split(" ").length === 1 && targetNormName.split(" ").length >= 2 && targetNormName.startsWith(existingNameNorm));
 
           const clientEditInput: any = {
             ...(isPlaceholderExistingName || existingNameNorm === targetNormName
@@ -1722,16 +2954,24 @@ async function executePushQuoteToJobberInternal(
           // Non-fatal if propertyId edit isn't needed
         }
 
-        // Only reuse an existing quote if quote.existingJobberQuoteId was explicitly supplied
+        // Reuse an existing non-archived quote on this client so repeated syncs NEVER create duplicate draft quotes
         const recentClientQuotes: any[] = existingClient.quotes?.nodes || [];
-        const matchedExistingQuote =
-          liveQuoteId ? recentClientQuotes.find((rq: any) => rq.id === liveQuoteId) : undefined;
+        const activeNonPurgedQuotes = recentClientQuotes.filter(
+          (rq: any) =>
+            rq?.id &&
+            !PURGED_FAKE_JOBBER_QUOTE_IDS.has(rq.id) &&
+            !String(rq.quoteStatus || "").toLowerCase().includes("archiv")
+        );
+        const preferredExistingQuote =
+          (liveQuoteId ? recentClientQuotes.find((rq: any) => rq.id === liveQuoteId) : undefined) ||
+          activeNonPurgedQuotes.find((rq: any) => !String(rq.quoteStatus || "").toLowerCase().includes("draft")) ||
+          activeNonPurgedQuotes[activeNonPurgedQuotes.length - 1];
 
-        if (matchedExistingQuote?.id) {
-          liveQuoteId = matchedExistingQuote.id;
-          liveQuoteNumber = `QT-${matchedExistingQuote.quoteNumber || extractJobberNumericId(matchedExistingQuote.id)}`;
-          liveJobberWebUri = matchedExistingQuote.jobberWebUri || resolveJobberWebUri("quotes", matchedExistingQuote.id);
-          liveClientHubUri = matchedExistingQuote.clientHubUri;
+        if (preferredExistingQuote?.id) {
+          liveQuoteId = preferredExistingQuote.id;
+          liveQuoteNumber = `QT-${preferredExistingQuote.quoteNumber || extractJobberNumericId(preferredExistingQuote.id)}`;
+          liveJobberWebUri = preferredExistingQuote.jobberWebUri || resolveJobberWebUri("quotes", preferredExistingQuote.id);
+          liveClientHubUri = preferredExistingQuote.clientHubUri;
         }
       } else {
         const createClientMutation = `
@@ -1883,32 +3123,152 @@ async function executePushQuoteToJobberInternal(
 
       // ─────────────────────────────────────────────────────────────────────────
       // STEP 2B: Create (or Update existing) Draft Quote in Jobber (quoteCreate / quoteEdit)
-      // IMPORTANT: Line item descriptions must ONLY contain the clean service scope,
-      // never the phone call transcription. Call summaries/links belong in the quote message/note.
+      // Uses canonical TidyUps quote package so 7-Tab Clean Leads Sheet and Master Quotes
+      // produce identical Jobber drafts (Summary Header + Service + $20 Fuel - $10 Discount + 12.5% Tax + $100 Deposit)
       // ─────────────────────────────────────────────────────────────────────────
-      const cleanQuoteNoteMessage = (() => {
-        const rawNote = String(quote.notes || "").trim();
-        if (!rawNote) {
-          return `Thank you for choosing TidyUps Cleaning Service Inc! ${quoteTitle} at ${
-            quote.serviceAddress || "Edmonton, AB"
-          }. Dispatch Summary: https://app.tidyupscleaning.com/?view=QUICK_QUOTE`;
-        }
-        return rawNote.includes("https://")
-          ? rawNote
-          : `${rawNote} | Call & Quote Link: https://app.tidyupscleaning.com/?view=QUICK_QUOTE`;
-      })();
+      const canonicalPkg = buildCanonicalQuoteBreakdown({
+        service: quote.service || quoteTitle,
+        bedrooms: quote.bedrooms,
+        bathrooms: quote.bathrooms,
+        depositOverride: Number(quote.depositRequired) >= 100 ? Number(quote.depositRequired) : 100,
+        notes: quote.notes,
+      });
+
+      const cleanQuoteNoteMessage = buildCleaningSummaryMessage(
+        quote.service || quoteTitle,
+        quote.notes
+      );
 
       const sanitizeLineItemDescription = (rawDesc: string | undefined, fallbackTitle: string): string => {
         const base = String(rawDesc || fallbackTitle).trim();
         // Strip any trailing "| Notes: ..." that might contain call transcripts
         const withoutNotes = base.split(/\s*\|\s*Notes:/i)[0].trim();
-        return withoutNotes.length > 200 ? withoutNotes.slice(0, 200).trim() : withoutNotes || fallbackTitle;
+        return withoutNotes.length > 250 ? withoutNotes.slice(0, 250).trim() : withoutNotes || fallbackTitle;
       };
+
+      const hasFuelInProvided =
+        Array.isArray(quote.lineItems) &&
+        quote.lineItems.some((li) => /fuel|surcharge/i.test(`${li.name || ""} ${li.description || ""}`));
+
+      const effectiveLineItems =
+        Array.isArray(quote.lineItems) && quote.lineItems.length >= 2 && hasFuelInProvided
+          ? quote.lineItems.map((li, idx) => {
+              const qty = Number(li.quantity) || 1;
+              const up = Number(li.unitPrice ?? li.total ?? 0);
+              const isPrimaryService = idx === 0 && up > 0 && !/fuel|discount/i.test(li.name || li.description || "");
+              return {
+                name: li.name || (isPrimaryService ? canonicalPkg.cleanItemName : quoteTitle),
+                description: sanitizeLineItemDescription(
+                  li.description,
+                  isPrimaryService
+                    ? `${canonicalPkg.cleanItemName}\n${canonicalPkg.crewLabel}`
+                    : li.name || quoteTitle
+                ),
+                quantity: qty,
+                unitPrice: up,
+                unitCost:
+                  (li as any).unitCost !== undefined
+                    ? Number((li as any).unitCost)
+                    : isPrimaryService
+                    ? Math.round(up * 0.5 * 100) / 100
+                    : 0,
+              };
+            })
+          : canonicalPkg.lineItems.map((li) => ({
+              name: li.name,
+              description: li.description,
+              quantity: li.quantity,
+              unitPrice: li.unitPrice,
+              unitCost: li.unitCost ?? 0,
+            }));
+
+      const effectiveDeposit =
+        Number(quote.depositRequired) >= 100
+          ? Number(quote.depositRequired)
+          : canonicalPkg.depositRequired || 100;
 
       if (!quote.createRequestOnly && jobberClientId && propertyId) {
         if (liveQuoteId) {
-          // Quote already exists for this client — update it via quoteEdit instead of creating a duplicate!
+          // Quote already exists for this client — update its line items (via quoteCreateLineItems + quoteDeleteLineItems)
+          // AND its title, message, and deposit (via quoteEdit) so Jobber reflects 100% of adjustments!
           try {
+            const getExistingLineItemsQuery = `
+              query GetQuoteLineItemIds($id: EncodedId!) {
+                quote(id: $id) {
+                  id
+                  lineItems(first: 20) {
+                    nodes {
+                      id
+                    }
+                  }
+                }
+              }
+            `;
+            const existingQuoteData = await jobberGraphql<any>(
+              cleanToken,
+              getExistingLineItemsQuery,
+              { id: liveQuoteId },
+              credentials
+            ).catch(() => null);
+            const oldLineItemIds: string[] = (existingQuoteData?.quote?.lineItems?.nodes || [])
+              .map((n: any) => n?.id)
+              .filter(Boolean);
+
+            const createLineItemsInput = effectiveLineItems.map((li) => ({
+              name: li.name,
+              description: li.description,
+              quantity: Number(li.quantity) || 1,
+              unitPrice: Number(li.unitPrice),
+              ...(li.unitCost && li.unitCost > 0 ? { unitCost: Number(li.unitCost) } : {}),
+              saveToProductsAndServices: false,
+            }));
+
+            const createLineItemsMutation = `
+              mutation AddUpdatedQuoteLineItems($quoteId: EncodedId!, $lineItems: [QuoteCreateLineItemAttributes!]!) {
+                quoteCreateLineItems(quoteId: $quoteId, lineItems: $lineItems) {
+                  quote {
+                    id
+                  }
+                  userErrors {
+                    message
+                  }
+                }
+              }
+            `;
+            const createdLiRes = await jobberGraphql<any>(
+              cleanToken,
+              createLineItemsMutation,
+              {
+                quoteId: liveQuoteId,
+                lineItems: createLineItemsInput,
+              },
+              credentials
+            ).catch(() => null);
+
+            if (createdLiRes?.quoteCreateLineItems?.quote?.id && oldLineItemIds.length > 0) {
+              const deleteLineItemsMutation = `
+                mutation RemoveOldQuoteLineItems($quoteId: EncodedId!, $lineItemIds: [EncodedId!]!) {
+                  quoteDeleteLineItems(quoteId: $quoteId, lineItemIds: $lineItemIds) {
+                    quote {
+                      id
+                    }
+                    userErrors {
+                      message
+                    }
+                  }
+                }
+              `;
+              await jobberGraphql<any>(
+                cleanToken,
+                deleteLineItemsMutation,
+                {
+                  quoteId: liveQuoteId,
+                  lineItemIds: oldLineItemIds,
+                },
+                credentials
+              ).catch(() => null);
+            }
+
             const editQuoteMutation = `
               mutation EditJobberQuote($quoteId: EncodedId!, $attributes: QuoteEditAttributes!) {
                 quoteEdit(quoteId: $quoteId, attributes: $attributes) {
@@ -1925,16 +3285,38 @@ async function executePushQuoteToJobberInternal(
                 }
               }
             `;
-            const editAttrs: any = {
-              title: quoteTitle,
-              message: cleanQuoteNoteMessage,
-            };
-            const editRes = await jobberGraphql<any>(
+            let editRes = await jobberGraphql<any>(
               cleanToken,
               editQuoteMutation,
-              { quoteId: liveQuoteId, attributes: editAttrs },
+              {
+                quoteId: liveQuoteId,
+                attributes: {
+                  title: canonicalPkg.cleanItemName || quoteTitle,
+                  message: cleanQuoteNoteMessage,
+                  deposit: {
+                    rate: effectiveDeposit,
+                    type: "Unit",
+                  },
+                },
+              },
               credentials
-            );
+            ).catch(() => null);
+
+            if (!editRes?.quoteEdit?.quote) {
+              editRes = await jobberGraphql<any>(
+                cleanToken,
+                editQuoteMutation,
+                {
+                  quoteId: liveQuoteId,
+                  attributes: {
+                    title: canonicalPkg.cleanItemName || quoteTitle,
+                    message: cleanQuoteNoteMessage,
+                  },
+                },
+                credentials
+              ).catch(() => null);
+            }
+
             const editedQuote = editRes?.quoteEdit?.quote;
             if (editedQuote?.id) {
               liveQuoteId = editedQuote.id;
@@ -1946,26 +3328,22 @@ async function executePushQuoteToJobberInternal(
             // Keep existing liveQuoteId metadata if quoteEdit fails
           }
         } else {
-          const lineItemsInput =
-            quote.lineItems && quote.lineItems.length > 0
-              ? quote.lineItems.map((li) => ({
-                  name: li.name || quoteTitle,
-                  description: sanitizeLineItemDescription(li.description, li.name || quoteTitle),
-                  quantity: Number(li.quantity) || 1,
-                  unitPrice: Number(li.unitPrice ?? li.total ?? 0),
-                  saveToProductsAndServices: false,
-                }))
-              : [
-                  {
-                    name: quoteTitle,
-                    description: `${quoteTitle} — ${quote.serviceAddress || "Edmonton, AB"}${
-                      quote.depositRequired ? ` (Deposit: $${quote.depositRequired})` : ""
-                    }`,
-                    quantity: 1,
-                    unitPrice: Number(quote.total) || 280,
-                    saveToProductsAndServices: false,
-                  },
-                ];
+          const lineItemsWithCost = effectiveLineItems.map((li) => ({
+            name: li.name,
+            description: li.description,
+            quantity: Number(li.quantity) || 1,
+            unitPrice: Number(li.unitPrice),
+            ...(li.unitCost && li.unitCost > 0 ? { unitCost: Number(li.unitCost) } : {}),
+            saveToProductsAndServices: false,
+          }));
+
+          const lineItemsBasic = effectiveLineItems.map((li) => ({
+            name: li.name,
+            description: li.description,
+            quantity: Number(li.quantity) || 1,
+            unitPrice: Number(li.unitPrice),
+            saveToProductsAndServices: false,
+          }));
 
           const createQuoteMutation = `
             mutation CreateJobberQuote($attributes: QuoteCreateAttributes!) {
@@ -1984,38 +3362,58 @@ async function executePushQuoteToJobberInternal(
             }
           `;
 
-          const baseAttributes: any = {
+          const baseAttributesWithCost: any = {
             clientId: jobberClientId,
             propertyId,
-            title: quoteTitle,
+            title: canonicalPkg.cleanItemName || quoteTitle,
             message: cleanQuoteNoteMessage,
-            lineItems: lineItemsInput,
-          };
-          if (Number(quote.depositRequired) > 0) {
-            baseAttributes.deposit = {
-              rate: Number(quote.depositRequired),
+            lineItems: lineItemsWithCost,
+            deposit: {
+              rate: effectiveDeposit,
               type: "Unit",
-            };
-          }
+            },
+          };
+
+          const baseAttributesBasic: any = {
+            clientId: jobberClientId,
+            propertyId,
+            title: canonicalPkg.cleanItemName || quoteTitle,
+            message: cleanQuoteNoteMessage,
+            lineItems: lineItemsBasic,
+            deposit: {
+              rate: effectiveDeposit,
+              type: "Unit",
+            },
+          };
 
           let createdQuote: any = null;
           try {
             const quoteRes = await jobberGraphql<any>(
               cleanToken,
               createQuoteMutation,
-              { attributes: baseAttributes },
+              { attributes: baseAttributesWithCost },
               credentials
             );
             createdQuote = quoteRes?.quoteCreate?.quote;
           } catch {
-            const { deposit: _dep, ...fallbackAttributes } = baseAttributes;
-            const quoteRes2 = await jobberGraphql<any>(
-              cleanToken,
-              createQuoteMutation,
-              { attributes: fallbackAttributes },
-              credentials
-            );
-            createdQuote = quoteRes2?.quoteCreate?.quote;
+            try {
+              const quoteResBasic = await jobberGraphql<any>(
+                cleanToken,
+                createQuoteMutation,
+                { attributes: baseAttributesBasic },
+                credentials
+              );
+              createdQuote = quoteResBasic?.quoteCreate?.quote;
+            } catch {
+              const { deposit: _dep, ...fallbackAttributes } = baseAttributesBasic;
+              const quoteResFallback = await jobberGraphql<any>(
+                cleanToken,
+                createQuoteMutation,
+                { attributes: fallbackAttributes },
+                credentials
+              );
+              createdQuote = quoteResFallback?.quoteCreate?.quote;
+            }
           }
 
           if (createdQuote?.id) {

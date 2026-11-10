@@ -29,6 +29,7 @@ import { JOBBER_TEAM_MEMBERS } from '../data/jobberCalendarData';
 import {
   TIDYUPS_DRIVE_FOLDER_NAME,
   uploadWholeProjectZipToDriveFolder,
+  updateServerProjectPrNumber,
 } from '../services/googleDriveBackupService';
 
 interface QuickLinksModalProps {
@@ -82,12 +83,15 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
     setIsUploadingDrive(true);
     setDriveStatus(null);
     try {
+      if (requestedPr) {
+        await updateServerProjectPrNumber(requestedPr).catch(() => {});
+      }
       const res = await uploadWholeProjectZipToDriveFolder({
         requestedPr,
         forceRebuild: true,
       });
       setDriveStatus({
-        message: `✓ Saved "${res.file.name}" (${res.prLabel || 'PR#'}) into Drive folder "${res.folder.name}"!`,
+        message: `✓ Built & Uploaded "${res.file.name}" (${res.prLabel || requestedPr || 'PR#'}) directly into Drive folder "${res.folder.name}"!`,
         folderLink: res.folder.webViewLink,
       });
     } catch (err: any) {
@@ -109,9 +113,9 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           owner: 'Ai-Builder6',
-          repo: opts?.prNumber ? `APP.TIDYUPSCLEANING.COM-START-PR${opts.prNumber}` : 'APP.TIDYUPSCLEANING.COM-START-PR6',
+          repo: opts?.prNumber ? `APP.TIDYUPSCLEANING.COM-PR${opts.prNumber}` : 'APP.TIDYUPSCLEANING.COM-PR16',
           createNewCopy: Boolean(opts?.createNewCopy),
-          prNumber: opts?.prNumber,
+          prNumber: opts?.prNumber || 16,
         }),
       });
       const data = await res.json();
@@ -479,7 +483,7 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
                     {isPushingGithub ? 'Syncing GitHub...' : 'GitHub Sync (1-Click)'}
                   </h5>
                   <p className="text-[10px] text-emerald-300 font-mono font-bold truncate">
-                    Push Copy to PR6
+                    Push Copy to PR16
                   </p>
                 </div>
               </button>
@@ -523,7 +527,7 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
                       GitHub Repos &amp; Drive Backup Manager
                     </h5>
                     <p className="text-[10px] text-emerald-700 font-semibold truncate">
-                      Ai-Builder6/APP.TIDYUPSCLEANING.COM-START-PR6 • Choose PR6–PR11
+                      Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16 • Choose PR6–PR16
                     </p>
                   </div>
                   <ChevronRight className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -692,22 +696,22 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
               </button>
             </div>
 
-            {/* Explicit PR6, PR7, PR8, PR9, PR10 Checkpoint Buttons */}
+            {/* Explicit PR6–PR12 Checkpoint Buttons */}
             <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-indigo-200/60">
               <span className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider">
-                Save Specific PR# to Drive:
+                Update &amp; Upload Specific PR# to Drive:
               </span>
-              {['PR6', 'PR7', 'PR8', 'PR9', 'PR10'].map((pr) => (
+              {['PR6', 'PR7', 'PR8', 'PR9', 'PR10', 'PR11', 'PR12'].map((pr) => (
                 <button
                   key={pr}
                   type="button"
                   disabled={isUploadingDrive}
                   onClick={() => handleUploadWholeProjectToDrive(pr)}
                   className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg font-mono font-bold flex items-center gap-1 transition-all cursor-pointer text-[11px] active:scale-95 disabled:opacity-50"
-                  title={`Save ${pr} archive into "${TIDYUPS_DRIVE_FOLDER_NAME}" in Google Drive`}
+                  title={`Build & upload ${pr} archive directly into "${TIDYUPS_DRIVE_FOLDER_NAME}" in Google Drive`}
                 >
                   <CloudUpload className="w-3 h-3 text-emerald-600" />
-                  <span>Save {pr}</span>
+                  <span>Upload {pr}</span>
                 </button>
               ))}
             </div>

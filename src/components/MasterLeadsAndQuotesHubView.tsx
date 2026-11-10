@@ -39,6 +39,7 @@ import {
   resolveCleanSheetTab,
   filterValidRecentLeads,
   isFakeOrSimulatedLead,
+  isLeadDefaultInfo,
 } from '../services/styledLeadsWorkbookBuilder';
 import { Technician, ServiceTicket } from '../types/dispatch';
 import { ScheduledJobItem } from './ScheduledJobsView';
@@ -709,7 +710,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
     };
 
     for (const l of uniqueLeads) {
-      const tab = resolveCleanSheetTab(l);
+      const tab = resolveCleanSheetTab(l.sourceTab, l);
       byTab[tab].push({ ...l, sourceTab: tab });
     }
 
@@ -927,6 +928,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
     );
     const isExpanded = expandedTranscriptRowId === lead.id;
     const resolvedTab = resolveCleanSheetTab(lead);
+    const isDefaultInfo = isLeadDefaultInfo(lead);
 
     return (
       <React.Fragment key={`lead-row-${lead.id}`}>
@@ -940,12 +942,36 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
             >
               <span>{theme.iconLabel}</span>
             </button>
+            <div className="mt-1">
+              {isDefaultInfo ? (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-950 border border-amber-400 text-[10px] font-black uppercase tracking-tight shadow-2xs"
+                  title="This lead has default placeholder info (3 Bed / 2 Bath or generic Edmonton address) — not real client-submitted details"
+                >
+                  🏷️ DEFAULT INFO
+                </span>
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black uppercase tracking-tight"
+                  title="Verified real client info submitted by customer"
+                >
+                  ✓ REAL CLIENT INFO
+                </span>
+              )}
+            </div>
           </td>
           <td className="px-3 py-2.5 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">
             {String(lead.dateOfServiceRequested || lead.dateReceived || '').slice(0, 10) || '2026-10-27'}
           </td>
           <td className="px-3 py-2.5">
-            <div className="font-black text-slate-900 text-xs sm:text-sm">{lead.customerName}</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-black text-slate-900 text-xs sm:text-sm">{lead.customerName}</span>
+              {isDefaultInfo && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-400 text-[9px] font-black uppercase tracking-wider">
+                  🏷️ DEFAULT INFO
+                </span>
+              )}
+            </div>
             {lead.email && <div className="text-[11px] text-slate-500 font-mono">{lead.email}</div>}
           </td>
           <td className="px-3 py-2.5 whitespace-nowrap">
@@ -983,13 +1009,31 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
               </div>
               <div className="text-[10px] text-slate-500 font-semibold pl-4">
                 {lead.city || 'Edmonton'} {lead.postalCode ? `• ${lead.postalCode}` : ''}
+                {isDefaultInfo &&
+                  (!lead.address ||
+                    lead.address.trim().toLowerCase() === 'edmonton, ab' ||
+                    lead.address.trim().toLowerCase() === 'edmonton') && (
+                    <span className="block text-[9px] font-black text-amber-800">
+                      🏷️ Default Address
+                    </span>
+                  )}
               </div>
             </button>
           </td>
           <td className="px-3 py-2.5 max-w-[260px]">
+            {isDefaultInfo ? (
+              <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-400 text-[10px] font-black uppercase tracking-tight">
+                <span>🏷️ Default Info — Not Real Client Info</span>
+              </div>
+            ) : (
+              <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black uppercase tracking-tight">
+                <span>✓ Real Client Info</span>
+              </div>
+            )}
             <div className="text-xs font-extrabold text-slate-900">{lead.serviceRequested || 'Residential Cleaning'}</div>
             <div className="text-[11px] text-slate-600 font-medium">
               {lead.bedrooms || '3 Bedrooms'} • {lead.bathrooms || '2 Bathrooms'}
+              {isDefaultInfo ? ' (Default 3B/2B Base)' : ''}
             </div>
             {lead.notes && (
               <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5" title={lead.notes}>
@@ -1007,9 +1051,18 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
             )}
           </td>
           <td className="px-3 py-2.5 whitespace-nowrap">
-            <div className="text-xs sm:text-sm font-black font-mono text-emerald-800">
-              ${Number(lead.quotedAmount || 221.07).toFixed(2)}
+            <div className={`text-xs sm:text-sm font-black font-mono ${isDefaultInfo ? 'text-amber-800' : 'text-emerald-800'}`}>
+              {isDefaultInfo ? 'Est. ' : ''}${Number(lead.quotedAmount || 221.07).toFixed(2)}
             </div>
+            {isDefaultInfo ? (
+              <div className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 mt-0.5">
+                🏷️ Default Info (3B/2B)
+              </div>
+            ) : (
+              <div className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 mt-0.5">
+                ✓ Real Client Quote
+              </div>
+            )}
             {lead.quoteNumber && (
               <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
                 {lead.quoteNumber}
@@ -2174,7 +2227,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
                       postalCode: 'T5J 0N3',
                       propertyType: 'Single Family Home',
                       bedrooms: call.extractedBedrooms || '3 Bedrooms',
-                      bathrooms: call.extractedBathrooms || '2.5 Bathrooms',
+                      bathrooms: call.extractedBathrooms || '2 Bathrooms',
                       sqft: 1850,
                       serviceRequested: call.extractedService || 'Residential Standard Cleaning',
                       frequency: 'One-Time',
@@ -2189,9 +2242,18 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
                       leadVerdictLabel:
                         call.leadVerdictLabel ||
                         (isConfirmedCleaning ? '✅ Good Lead — Potential Job' : '🟡 Potential Job — Follow-Up'),
+                      isDefaultQuoteInfo: Boolean(call.isDefaultQuoteInfo ?? !call.hasCleaningIntent),
+                      defaultInfoLabel:
+                        call.defaultInfoLabel ||
+                        (call.isDefaultQuoteInfo ?? !call.hasCleaningIntent
+                          ? '⚠️ Default Placeholder (Not Real Caller Info — 3 Bed / 2 Bath Base Estimate)'
+                          : '✓ Verified Caller Info'),
                       callTranscript: call.transcriptText || '',
                       callSummary: call.summary || '',
                       notes: [
+                        call.isDefaultQuoteInfo ?? !call.hasCleaningIntent
+                          ? '⚠️ DEFAULT 3B/2B PLACEHOLDER (NOT REAL CALLER INFO — Confirm room counts with caller)'
+                          : '✓ VERIFIED CALLER INFO',
                         call.summary ? `Sona AI Summary: ${call.summary}` : '',
                         call.transcriptText ? `Transcript: ${call.transcriptText}` : '',
                       ]
@@ -2220,6 +2282,11 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
                                 {call.answeredByAi && (
                                   <span className="px-1.5 py-0.5 rounded bg-purple-500/30 border border-purple-400/40 text-purple-200 text-[10px] font-bold">
                                     🤖 Sonia AI
+                                  </span>
+                                )}
+                                {!blocked && (call.isDefaultQuoteInfo ?? !call.hasCleaningIntent) && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500/25 border border-amber-400/50 text-amber-200 text-[10px] font-black">
+                                    ⚠️ Default 3B/2B Placeholder (Not Real Info)
                                   </span>
                                 )}
                               </div>

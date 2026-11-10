@@ -87,6 +87,11 @@ export interface AppPersistentStore {
     mapInspectDate?: string | null;
     updatedAt?: string;
   };
+  fbPages?: any[];
+  fbBotSettings?: any;
+  fbMessengerThreads?: any[];
+  ownerLeadNotifications?: any[];
+  cleanSheetConfig?: any;
 }
 
 // Ensure data directory exists
@@ -98,6 +103,9 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
+let inMemoryStoreCache: AppPersistentStore | null = null;
+let inMemoryStoreMtimeMs = 0;
+
 /**
  * Loads stored data from disk exclusively for TidyUps Cleaning (app.tidyupscleaning.com)
  */
@@ -106,19 +114,29 @@ export function loadStore(_projectId?: string): AppPersistentStore | null {
   const bundledFile = resolveBundledStoreFilePath();
 
   try {
-    const candidateFiles = [targetFile, bundledFile];
+    if (inMemoryStoreCache && fs.existsSync(targetFile)) {
+      const currentMtime = fs.statSync(targetFile).mtimeMs;
+      if (currentMtime === inMemoryStoreMtimeMs) {
+        return inMemoryStoreCache;
+      }
+    }
+
+    const candidateFiles = Array.from(new Set([targetFile, bundledFile]));
 
     let newestStore: AppPersistentStore | null = null;
     let newestTime = 0;
+    let chosenMtime = 0;
 
     for (const file of candidateFiles) {
       if (fs.existsSync(file)) {
         try {
+          const stat = fs.statSync(file);
           const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as AppPersistentStore;
           const ts = parsed?.lastSavedAt ? new Date(parsed.lastSavedAt).getTime() : 1;
           if (!newestStore || ts > newestTime) {
             newestStore = parsed;
             newestTime = ts;
+            chosenMtime = stat.mtimeMs;
           }
         } catch {
           // skip unreadable candidate
@@ -131,7 +149,13 @@ export function loadStore(_projectId?: string): AppPersistentStore | null {
         const deduped = new Map<string, any>();
         for (const c of newestStore.quoCallLogs) {
           if (!c) continue;
-          const normId = String(c.id || c.callId || "").replace(/^AC([0-9a-f]{32})$/i, "QUO_$1");
+          const rawId = String(c.id || c.callId || "");
+          if (!rawId || rawId.startsWith("call_")) continue;
+          const evType = String(c.eventType || "");
+          if (evType.startsWith("contact.")) continue;
+          const cPhone = String(c.callerPhone || "").trim();
+          if (!cPhone || cPhone === "Unknown") continue;
+          const normId = rawId.replace(/^AC([0-9a-f]{32})$/i, "QUO_$1");
           if (!normId) continue;
           const normalizedCall = { ...c, id: normId, callId: normId };
           const prev = deduped.get(normId);
@@ -146,8 +170,12 @@ export function loadStore(_projectId?: string): AppPersistentStore | null {
             });
           }
         }
-        newestStore.quoCallLogs = Array.from(deduped.values());
+        newestStore.quoCallLogs = Array.from(deduped.values()).sort((a: any, b: any) =>
+          String(b?.timestamp || "").localeCompare(String(a?.timestamp || ""))
+        );
       }
+      inMemoryStoreCache = newestStore;
+      inMemoryStoreMtimeMs = chosenMtime;
       return newestStore;
     }
   } catch (err) {
@@ -218,17 +246,29 @@ export function saveStore(
       const existingLogs = Array.isArray(existing.quoCallLogs) ? existing.quoCallLogs : [];
       const incomingLogs = Array.isArray(store.quoCallLogs) ? store.quoCallLogs : null;
       const normalizeId = (rawId: any) => String(rawId || "").replace(/^AC([0-9a-f]{32})$/i, "QUO_$1");
+      const isValidCallEntry = (c: any) => {
+        if (!c) return false;
+        const rawId = String(c.id || c.callId || "");
+        if (!rawId || rawId.startsWith("call_")) return false;
+        const evType = String(c.eventType || "");
+        if (evType.startsWith("contact.")) return false;
+        const cPhone = String(c.callerPhone || "").trim();
+        if (!cPhone || cPhone === "Unknown") return false;
+        return true;
+      };
 
       const byId = new Map<string, any>();
-      for (const c of existingLogs) {
-        if (!c) continue;
-        const nid = normalizeId(c.id || c.callId);
-        if (!nid) continue;
-        byId.set(nid, { ...c, id: nid, callId: nid });
+      if (!explicitReplace) {
+        for (const c of existingLogs) {
+          if (!isValidCallEntry(c)) continue;
+          const nid = normalizeId(c.id || c.callId);
+          if (!nid) continue;
+          byId.set(nid, { ...c, id: nid, callId: nid });
+        }
       }
       if (incomingLogs) {
         for (const c of incomingLogs) {
-          if (!c) continue;
+          if (!isValidCallEntry(c)) continue;
           const nid = normalizeId(c.id || c.callId);
           if (!nid) continue;
           const normalizedItem = { ...c, id: nid, callId: nid };
@@ -237,6 +277,7 @@ export function saveStore(
             prev &&
             (prev.manuallyBlocked || prev.status === 'SOLICITOR_BLOCKED') &&
             normalizedItem.manuallyBlocked !== false &&
+            !normalizedItem.manuallyMarkedGoodLead &&
             !explicitReplace
           ) {
             byId.set(nid, {
@@ -330,14 +371,18 @@ export function saveStore(
         (v: any) => !v?.startAt || String(v.startAt) >= "2026-10-01"
       );
     }
-    if (Array.isArray(merged.quoCallLogs) && merged.quoCallLogs.length > 120) {
-      merged.quoCallLogs = merged.quoCallLogs.slice(0, 120);
+    if (Array.isArray(merged.quoCallLogs) && merged.quoCallLogs.length > 250) {
+      merged.quoCallLogs = merged.quoCallLogs.slice(0, 250);
     }
 
     // Replace Quo "AC" + 32 hex call IDs with "QUO_" so GitHub Push Protection never mistakes them for a Twilio SID
     const json = JSON.stringify(merged, null, 2).replace(/AC([0-9a-f]{32})/gi, "QUO_$1");
 
     fs.writeFileSync(targetFile, json, "utf-8");
+    inMemoryStoreCache = merged;
+    try {
+      inMemoryStoreMtimeMs = fs.statSync(targetFile).mtimeMs;
+    } catch {}
 
     return true;
   } catch (err) {
