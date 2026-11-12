@@ -608,9 +608,14 @@ export function filterValidRecentLeads(rawLeads: any[]): AdLeadItem[] {
   }
 
   result.sort((a: any, b: any) => {
-    const aDate = String(a?.dateReceived || a?.dateAdded || a?.createdAt || '');
-    const bDate = String(b?.dateReceived || b?.dateAdded || b?.createdAt || '');
-    if (aDate !== bDate) return bDate.localeCompare(aDate);
+    const aRaw = String(a?.dateReceived || a?.dateAdded || a?.createdAt || '');
+    const bRaw = String(b?.dateReceived || b?.dateAdded || b?.createdAt || '');
+    const aMs = aRaw ? Date.parse(aRaw) : NaN;
+    const bMs = bRaw ? Date.parse(bRaw) : NaN;
+    if (!Number.isNaN(aMs) && !Number.isNaN(bMs) && aMs !== bMs) {
+      return bMs - aMs;
+    }
+    if (aRaw !== bRaw) return bRaw.localeCompare(aRaw);
     return 0;
   });
 
@@ -701,8 +706,109 @@ export function isLeadDefaultInfo(lead: any): boolean {
   return false;
 }
 
+/**
+ * Formats a lead's received timestamp into Edmonton local date (YYYY-MM-DD) and 12-hour time (e.g. "1:47 PM MST").
+ * Gracefully handles ISO timestamps, Unix epoch seconds/ms, pre-formatted sheet timestamps, and legacy date-only strings.
+ */
+export function formatLeadReceivedTimestamp(leadOrDate: any): {
+  dateStr: string;
+  timeStr: string;
+  combined: string;
+  hasTime: boolean;
+} {
+  const isObj = leadOrDate && typeof leadOrDate === 'object' && !(leadOrDate instanceof Date);
+  const rawVal = isObj
+    ? leadOrDate.dateReceived || leadOrDate.createdAt || leadOrDate.dateAdded || ''
+    : leadOrDate;
+  const explicitTimeStr = isObj && leadOrDate.timeReceived ? String(leadOrDate.timeReceived).trim() : '';
+
+  const rawStr = String(rawVal ?? '').trim();
+  if (!rawStr) {
+    const now = new Date();
+    const fallbackDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Edmonton',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+    return {
+      dateStr: fallbackDate,
+      timeStr: explicitTimeStr,
+      combined: explicitTimeStr ? `${fallbackDate} • ${explicitTimeStr}` : fallbackDate,
+      hasTime: Boolean(explicitTimeStr),
+    };
+  }
+
+  // Already formatted "YYYY-MM-DD • 1:47 PM MST"
+  if (rawStr.includes('•')) {
+    const [left, right] = rawStr.split('•').map((s) => s.trim());
+    const dPart = left || rawStr.slice(0, 10);
+    const tPart = right || explicitTimeStr;
+    return {
+      dateStr: dPart,
+      timeStr: tPart,
+      combined: tPart ? `${dPart} • ${tPart}` : dPart,
+      hasTime: Boolean(tPart),
+    };
+  }
+
+  // Strictly date-only string ("YYYY-MM-DD") without time component
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
+    return {
+      dateStr: rawStr,
+      timeStr: explicitTimeStr,
+      combined: explicitTimeStr ? `${rawStr} • ${explicitTimeStr}` : rawStr,
+      hasTime: Boolean(explicitTimeStr),
+    };
+  }
+
+  let parsedDate: Date | null = null;
+  if (/^\d{10}$/.test(rawStr)) {
+    parsedDate = new Date(Number(rawStr) * 1000);
+  } else if (/^\d{13}$/.test(rawStr)) {
+    parsedDate = new Date(Number(rawStr));
+  } else {
+    const ms = Date.parse(rawStr);
+    if (!Number.isNaN(ms)) {
+      parsedDate = new Date(ms);
+    }
+  }
+
+  if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
+    const dFallback = rawStr.slice(0, 10);
+    return {
+      dateStr: dFallback,
+      timeStr: explicitTimeStr,
+      combined: explicitTimeStr ? `${dFallback} • ${explicitTimeStr}` : rawStr,
+      hasTime: Boolean(explicitTimeStr),
+    };
+  }
+
+  const dateStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Edmonton',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(parsedDate);
+
+  const timeStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Edmonton',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZoneName: 'short',
+  }).format(parsedDate);
+
+  return {
+    dateStr,
+    timeStr,
+    combined: `${dateStr} • ${timeStr}`,
+    hasTime: true,
+  };
+}
+
 const SHEET_COLUMNS = [
-  { header: 'Date Received', key: 'date', width: 14 },
+  { header: 'Date & Time Received', key: 'date', width: 26 },
   { header: 'Sheet Tab & Info ID', key: 'sheetTab', width: 26 },
   { header: 'Source / Campaign', key: 'source', width: 24 },
   { header: 'Client Name', key: 'customerName', width: 28 },
@@ -820,7 +926,7 @@ function styleWorksheetWithTheme(
     const quoteUrl = numericQuoteId ? `https://secure.getjobber.com/quotes/${numericQuoteId}` : '';
 
     const communicated = hasLeadBeenCommunicatedWith(lead);
-    const dateStr = String(lead.dateReceived || lead.createdAt || new Date().toISOString()).slice(0, 10);
+    const receivedTs = formatLeadReceivedTimestamp(lead);
 
     const cleanBed = String(lead.bedrooms || '3 Bedrooms').replace(/\s*\(Default.*?\)/i, '');
     const cleanBath = String(lead.bathrooms || '2 Bathrooms').replace(/\s*\(Default.*?\)/i, '');
@@ -832,7 +938,7 @@ function styleWorksheetWithTheme(
 
     const row = ws.getRow(rowNumber);
     row.values = [
-      dateStr,
+      receivedTs.combined,
       `${palette.icon} ${tabName} • [${infoPlacardBadge}]`,
       lead.source || lead.campaignName || tabName,
       isDefault ? `${lead.customerName || ''} [🏷️ DEFAULT INFO]` : lead.customerName || '',

@@ -40,6 +40,7 @@ import {
   filterValidRecentLeads,
   isFakeOrSimulatedLead,
   isLeadDefaultInfo,
+  formatLeadReceivedTimestamp,
 } from '../services/styledLeadsWorkbookBuilder';
 import { Technician, ServiceTicket } from '../types/dispatch';
 import { ScheduledJobItem } from './ScheduledJobsView';
@@ -929,6 +930,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
     const isExpanded = expandedTranscriptRowId === lead.id;
     const resolvedTab = resolveCleanSheetTab(lead);
     const isDefaultInfo = isLeadDefaultInfo(lead);
+    const receivedTs = formatLeadReceivedTimestamp(lead);
 
     return (
       <React.Fragment key={`lead-row-${lead.id}`}>
@@ -961,7 +963,22 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
             </div>
           </td>
           <td className="px-3 py-2.5 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">
-            {String(lead.dateOfServiceRequested || lead.dateReceived || '').slice(0, 10) || '2026-10-27'}
+            <div className="text-slate-900 font-black">{receivedTs.dateStr}</div>
+            {receivedTs.hasTime && (
+              <div
+                className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-sky-100 text-sky-900 border border-sky-300 text-[10px] font-black"
+                title={`Exact time lead was received (Edmonton time): ${receivedTs.combined}`}
+              >
+                <Clock className="w-2.5 h-2.5 text-sky-700 shrink-0" />
+                <span>{receivedTs.timeStr}</span>
+              </div>
+            )}
+            {lead.dateOfServiceRequested &&
+              String(lead.dateOfServiceRequested).slice(0, 10) !== receivedTs.dateStr && (
+                <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                  Req: {String(lead.dateOfServiceRequested).slice(0, 10)}
+                </div>
+              )}
           </td>
           <td className="px-3 py-2.5">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1893,7 +1910,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
               <thead className="bg-slate-900 text-white text-[11px] font-black uppercase tracking-wider sticky top-0 z-20 shadow-sm">
                 <tr>
                   <th className="px-3 py-3 border-r border-slate-700">Sheet Tab (Clickable)</th>
-                  <th className="px-3 py-3 border-r border-slate-700">Date</th>
+                  <th className="px-3 py-3 border-r border-slate-700">Date &amp; Time Received</th>
                   <th className="px-3 py-3 border-r border-slate-700">Customer Name</th>
                   <th className="px-3 py-3 border-r border-slate-700">Phone</th>
                   <th className="px-3 py-3 border-r border-slate-700">Address &amp; Map Pin</th>

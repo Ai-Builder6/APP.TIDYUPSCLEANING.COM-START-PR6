@@ -31,6 +31,7 @@ import {
   Globe,
   AlertTriangle,
   FileJson,
+  Clock,
 } from 'lucide-react';
 import { AdLeadItem, LeadStatus, LeadVerdict, CleanSheetTabName, CLEAN_SHEET_TABS } from '../types/lead';
 import { JobberQuote, extractJobberNumericId } from '../services/jobberSyncModules';
@@ -60,6 +61,7 @@ import {
   hasLeadBeenCommunicatedWith,
   filterValidRecentLeads,
   isLeadDefaultInfo,
+  formatLeadReceivedTimestamp,
 } from '../services/styledLeadsWorkbookBuilder';
 
 export type CleanSheetTab = 'ALL' | CleanSheetTabName;
@@ -931,7 +933,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   // Copy Clean Sheet Table as TSV to paste into any blank Google Sheet
   const handleCopySheetAsTsv = () => {
     const headers = [
-      'Date',
+      'Date & Time Received',
       'Sheet Tab',
       'Source',
       'Client Name',
@@ -955,8 +957,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       const quoteLink = numericQuoteId
         ? `https://secure.getjobber.com/quotes/${numericQuoteId}`
         : 'https://secure.getjobber.com/quotes';
+      const receivedTs = formatLeadReceivedTimestamp(l);
       return [
-        (l.dateReceived || new Date().toISOString()).slice(0, 10),
+        receivedTs.combined,
         resolveCleanSheetTab(l.sourceTab, l),
         l.source || 'Quo Call / Voice',
         l.customerName || '',
@@ -2280,7 +2283,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               <thead className="sticky top-0 z-20 bg-[#0b0f1a] shadow-lg border-b-2 border-emerald-500/50">
                 <tr className="text-[11px] font-extrabold uppercase tracking-wider text-slate-200">
                   <th className="py-3.5 px-3 bg-[#0b0f1a] border-r border-slate-800/80">
-                    Date &amp; Sheet Tab
+                    Date, Time &amp; Sheet Tab
                   </th>
                   <th className="py-3.5 px-3 bg-[#0b0f1a] border-r border-slate-800/80">
                     Client Name &amp; Contact
@@ -2338,23 +2341,35 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
                   const isRowSyncing = syncingRowId === lead.id;
                   const isDefaultInfo = isLeadDefaultInfo(lead);
+                  const receivedTs = formatLeadReceivedTimestamp(lead);
 
                   return (
                     <tr
                       key={lead.id}
                       className={`transition-colors ${rowColorClasses}`}
                     >
-                      {/* Date & Sheet Tab + Default Info ID Placard */}
+                      {/* Date, Time & Sheet Tab + Default Info ID Placard */}
                       <td className="py-3.5 px-3 align-top whitespace-nowrap border-r border-slate-800/50">
                         <div className="font-mono text-[11px] text-slate-200 font-bold">
-                          {(lead.dateReceived || '').slice(0, 10) || '2026-10-16'}
+                          {receivedTs.dateStr}
                         </div>
-                        <span
-                          className={`inline-block mt-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold ${badgeColorClasses}`}
-                        >
-                          {channelIcon}
-                          {rowTab}
-                        </span>
+                        {receivedTs.hasTime && (
+                          <div
+                            className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-400/40 font-mono text-[10px] font-bold text-sky-200"
+                            title={`Exact time lead was received (Edmonton time): ${receivedTs.combined}`}
+                          >
+                            <Clock className="w-2.5 h-2.5 text-sky-300 shrink-0" />
+                            <span>{receivedTs.timeStr}</span>
+                          </div>
+                        )}
+                        <div className="mt-1">
+                          <span
+                            className={`inline-block px-2.5 py-0.5 rounded-md text-[10px] font-extrabold ${badgeColorClasses}`}
+                          >
+                            {channelIcon}
+                            {rowTab}
+                          </span>
+                        </div>
                         <div className="mt-1">
                           {isDefaultInfo ? (
                             <span

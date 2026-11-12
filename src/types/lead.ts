@@ -59,6 +59,8 @@ export interface AdLeadItem {
   adId?: string;
   createdAt?: string;
   dateReceived?: string;
+  timeReceived?: string;
+  receivedTimestampDisplay?: string;
   communicatedAt?: string;
   hasCommunicated?: boolean;
   status: 'New' | 'Contacted' | 'Quoted' | 'Converted' | 'Dismissed' | string;

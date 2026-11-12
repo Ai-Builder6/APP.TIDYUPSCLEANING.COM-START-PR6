@@ -338,8 +338,11 @@ export const ThankYouConversionPage: React.FC<ThankYouConversionPageProps> = ({
               <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 font-mono">
                 Google Ads Tag #2: AW-18539302675 ✓
               </span>
+              <span className="px-2 py-0.5 rounded bg-slate-950 border border-emerald-500/40 text-emerald-300 font-mono">
+                GTM Container: GTM-NPVZPMV5 ✓
+              </span>
               <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 font-mono">
-                GTM Container: GTM-PQ4NMPGP ✓
+                GTM Container #2: GTM-PQ4NMPGP ✓
               </span>
             </div>
 

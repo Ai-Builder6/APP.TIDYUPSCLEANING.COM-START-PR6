@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build \u0026\u0026 esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "dev": "tsx server.ts",
     "lint": "tsc --noEmit",
-    "oneclick": "npm install && npm run build && npm start",
+    "oneclick": "npm install \u0026\u0026 npm run build \u0026\u0026 npm start",
     "preview": "vite preview",
     "start": "node dist/server.cjs"
   },

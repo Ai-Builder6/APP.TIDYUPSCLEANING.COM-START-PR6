@@ -5719,13 +5719,139 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
           mutated = true;
         }
 
+        // Stamp Edmonton local Date & Time Received on every lead row
+        const tsInfo = formatEdmontonLeadTimestamp(
+          l.dateReceived || l.createdAt || l.dateAdded,
+          l.timeReceived
+        );
+        if (tsInfo.hasTime) {
+          if (l.timeReceived !== tsInfo.timeStr || l.receivedTimestampDisplay !== tsInfo.combined) {
+            l.timeReceived = tsInfo.timeStr;
+            l.receivedTimestampDisplay = tsInfo.combined;
+            mutated = true;
+          }
+        }
+
         return true;
       });
-      store.adLeads.sort((a: any, b: any) => String(b.dateReceived || "").localeCompare(String(a.dateReceived || "")));
+      store.adLeads.sort((a: any, b: any) => {
+        const aRaw = String(a?.dateReceived || a?.dateAdded || a?.createdAt || "");
+        const bRaw = String(b?.dateReceived || b?.dateAdded || b?.createdAt || "");
+        const aMs = aRaw ? Date.parse(aRaw) : NaN;
+        const bMs = bRaw ? Date.parse(bRaw) : NaN;
+        if (!Number.isNaN(aMs) && !Number.isNaN(bMs) && aMs !== bMs) {
+          return bMs - aMs;
+        }
+        return bRaw.localeCompare(aRaw);
+      });
     }
   }
 
   return mutated;
+}
+
+// Helper: Formats any inbound lead timestamp into Edmonton (America/Edmonton) local date & 12-hour time
+function formatEdmontonLeadTimestamp(
+  rawVal?: any,
+  explicitTimeFallback?: string
+): {
+  iso: string;
+  dateStr: string;
+  timeStr: string;
+  combined: string;
+  hasTime: boolean;
+} {
+  const rawStr = String(rawVal ?? "").trim();
+  const explicitTime = String(explicitTimeFallback ?? "").trim();
+
+  if (!rawStr) {
+    const now = new Date();
+    const dateStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Edmonton",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    const timeStr = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Edmonton",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    }).format(now);
+    return {
+      iso: now.toISOString(),
+      dateStr,
+      timeStr,
+      combined: `${dateStr} • ${timeStr}`,
+      hasTime: true,
+    };
+  }
+
+  // Strictly date-only ("YYYY-MM-DD")
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawStr)) {
+    return {
+      iso: rawStr,
+      dateStr: rawStr,
+      timeStr: explicitTime,
+      combined: explicitTime ? `${rawStr} • ${explicitTime}` : rawStr,
+      hasTime: Boolean(explicitTime),
+    };
+  }
+
+  // Handle "YYYY-MM-DD • 1:47 PM MST" from exported Google Sheet cells
+  const normalizedForParse = rawStr
+    .replace(/•/g, " ")
+    .replace(/\bMST\b/gi, "GMT-0700")
+    .replace(/\bMDT\b/gi, "GMT-0600")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  let parsed: Date | null = null;
+  if (/^\d{10}$/.test(rawStr)) {
+    parsed = new Date(Number(rawStr) * 1000);
+  } else if (/^\d{13}$/.test(rawStr)) {
+    parsed = new Date(Number(rawStr));
+  } else {
+    const ms = Date.parse(normalizedForParse);
+    if (!Number.isNaN(ms)) {
+      parsed = new Date(ms);
+    }
+  }
+
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    const dFallback = rawStr.slice(0, 10);
+    return {
+      iso: rawStr,
+      dateStr: dFallback,
+      timeStr: explicitTime,
+      combined: explicitTime ? `${dFallback} • ${explicitTime}` : rawStr,
+      hasTime: Boolean(explicitTime),
+    };
+  }
+
+  const dateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Edmonton",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(parsed);
+
+  const timeStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Edmonton",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).format(parsed);
+
+  return {
+    iso: parsed.toISOString(),
+    dateStr,
+    timeStr,
+    combined: `${dateStr} • ${timeStr}`,
+    hasTime: true,
+  };
 }
 
 // Helper: Maps any source label to one of the 7 Clean Google Sheet tabs
@@ -9333,6 +9459,11 @@ const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: an
   const quoteId = `quote_local_${Date.now()}`;
   const quoteNumber = `QT-${Math.floor(4385 + Math.random() * 500)}`;
   const nowIso = new Date().toISOString();
+  const rawInboundCreatedTime =
+    body.created_time || body.timestamp || body.lead_submit_timestamp || body.dateReceived || nowIso;
+  const parsedInboundTs = formatEdmontonLeadTimestamp(rawInboundCreatedTime);
+  const receivedIso = parsedInboundTs.hasTime && parsedInboundTs.iso.includes("T") ? parsedInboundTs.iso : nowIso;
+  const finalInboundTs = formatEdmontonLeadTimestamp(receivedIso);
 
   const newLead = {
     id: leadId,
@@ -9356,14 +9487,16 @@ const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: an
     source: source as any,
     sourceTab,
     campaignName: body.campaign_name || body.campaignName || `${sourceTab} Inbound Webhook`,
-    dateReceived: nowIso,
+    dateReceived: finalInboundTs.iso,
+    timeReceived: finalInboundTs.timeStr,
+    receivedTimestampDisplay: finalInboundTs.combined,
     status: "New",
     verdict: "Good lead" as const,
     isJobberSynced: false,
     quoteId,
     quoteNumber,
     quotedAmount,
-    notes: `${isDefaultQuoteInfo ? "[🏷️ DEFAULT INFO] " : ""}${body.message || body.notes || `Received via ${sourceTab} Webhook`}`,
+    notes: `[Received ${finalInboundTs.combined}] ${isDefaultQuoteInfo ? "[🏷️ DEFAULT INFO] " : ""}${body.message || body.notes || `Received via ${sourceTab} Webhook`}`,
     missingPhone: !phone,
     googleSheetSynced: true,
     googleSheetUrl: googleSheetsSyncState.sheetUrl,
@@ -9539,7 +9672,7 @@ function extractLeadsFromSheetMatrix(params: {
     }
 
     const headerScore = rowCells.filter((h) =>
-      /^(date|created_time|id|sheet tab|source|source_tab|lead source|client name|full_name|first_name|first name|last_name|last name|customer|name|phone|phone_number|mobile|email|email address|street address|street_address|address|service|service package|bedrooms|bathrooms|platform|ad_name|form_name)$/i.test(
+      /^(date|date & time received|date received|time received|created_time|timestamp|id|sheet tab|sheet tab & info id|source|source_tab|lead source|client name|full_name|first_name|first name|last_name|last name|customer|name|phone|phone_number|mobile|email|email address|street address|street_address|address|service|service package|bedrooms|bathrooms|platform|ad_name|form_name)$/i.test(
         h.replace(/\s*\(.*?\)\s*/g, "").trim()
       )
     ).length;
@@ -9694,14 +9827,25 @@ function extractLeadsFromSheetMatrix(params: {
 
     const { source, sourceTab } = resolveCleanSheetTab(inferredSourceInput);
 
-    const rawCreatedDate = getByHeader("date", "created_time", "timestamp", "date_received");
+    const rawCreatedDate = getByHeader(
+      "date & time received",
+      "date received",
+      "created_time",
+      "timestamp",
+      "date_received",
+      "date"
+    );
+    const rawTimeCol = getByHeader("time received", "time_received", "time");
     if (!rawCreatedDate) {
       // Skip undated historical rows so nothing older than 14 days is ever imported
       continue;
     }
+    const parsedSheetTs = formatEdmontonLeadTimestamp(
+      rawTimeCol && !rawCreatedDate.includes(":") ? `${rawCreatedDate} ${rawTimeCol}` : rawCreatedDate
+    );
     const requestedDate =
       getByHeader("requested date", "date_of_service_requested", "preferred_date").slice(0, 10) ||
-      rawCreatedDate.slice(0, 10);
+      parsedSheetTs.dateStr;
 
     const rawQuotedNum = parseFloat(
       String(getByHeader("quoted total", "quoted_amount", "total", "price") || "").replace(/[^0-9.]/g, "")
@@ -9744,7 +9888,9 @@ function extractLeadsFromSheetMatrix(params: {
       source: source as any,
       sourceTab,
       campaignName: `${sourceTab} — Google Sheet (${tabName || "Live Tab"})`,
-      dateReceived: rawCreatedDate,
+      dateReceived: parsedSheetTs.iso,
+      timeReceived: parsedSheetTs.timeStr || undefined,
+      receivedTimestampDisplay: parsedSheetTs.combined,
       status: getByHeader("status") || "New",
       verdict: (getByHeader("verdict") || "Good lead") as any,
       isJobberSynced: Boolean(rowQuoteNumber),
@@ -10289,7 +10435,7 @@ app.post("/api/leads/sync", async (req, res) => {
   saveStore(store, projectId);
 
   const headers = [
-    "Date",
+    "Date & Time Received",
     "Sheet Tab",
     "Source",
     "Client Name",
@@ -10311,7 +10457,7 @@ app.post("/api/leads/sync", async (req, res) => {
     headers.join("\t"),
     ...(store.adLeads || []).map((l: any) =>
       [
-        (l.dateReceived || "").slice(0, 10),
+        formatEdmontonLeadTimestamp(l.dateReceived || l.createdAt, l.timeReceived).combined,
         resolveCleanSheetTab(l.sourceTab || l.source, l).sourceTab,
         l.source || "Quo Call / Voice",
         l.customerName || "",
@@ -10532,6 +10678,15 @@ app.post(["/api/leads", "/api/leads/add"], async (req, res) => {
       (/\d/.test(resolvedAddr) || Boolean(resolvedPostal));
     const isDefaultQuoteInfo = item.isDefaultQuoteInfo !== undefined ? Boolean(item.isDefaultQuoteInfo) : !hasRealAddr;
 
+    const addLeadNowIso = new Date().toISOString();
+    const resolvedReceivedIso =
+      item.dateReceived && String(item.dateReceived).includes("T")
+        ? String(item.dateReceived)
+        : existingLeadObj?.dateReceived && String(existingLeadObj.dateReceived).includes("T")
+        ? String(existingLeadObj.dateReceived)
+        : addLeadNowIso;
+    const addLeadTs = formatEdmontonLeadTimestamp(resolvedReceivedIso, item.timeReceived || existingLeadObj?.timeReceived);
+
     const newLeadRow = {
       ...(existingLeadObj || {}),
       id: existingLeadObj?.id || item.id || `lead-clean-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -10548,11 +10703,13 @@ app.post(["/api/leads", "/api/leads/add"], async (req, res) => {
       defaultInfoLabel: isDefaultQuoteInfo
         ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
         : "✓ REAL CLIENT INFO",
-      dateOfServiceRequested: item.dateOfServiceRequested || existingLeadObj?.dateOfServiceRequested || new Date().toISOString().slice(0, 10),
+      dateOfServiceRequested: item.dateOfServiceRequested || existingLeadObj?.dateOfServiceRequested || addLeadTs.dateStr,
       source: source as any,
       sourceTab: existingLeadObj?.sourceTab === "Quo" && sourceTab === "Other Ads" ? "Quo" : sourceTab,
       campaignName: existingLeadObj?.campaignName || `Clean Sheet — ${sourceTab}`,
-      dateReceived: new Date().toISOString(),
+      dateReceived: addLeadTs.iso,
+      timeReceived: addLeadTs.timeStr,
+      receivedTimestampDisplay: addLeadTs.combined,
       status: quoteNumber ? "Quoted" : item.status || existingLeadObj?.status || "New",
       verdict: item.verdict || existingLeadObj?.verdict || "Good lead",
       hasCommunicated: true,
@@ -10834,7 +10991,7 @@ app.get("/api/leads/export.csv", (req, res) => {
   const quotes: any[] = Array.isArray(store?.quotes) ? store.quotes : [];
 
   const headers = [
-    "Date",
+    "Date & Time Received",
     "Sheet Tab",
     "Source",
     "Client Name",
@@ -10873,7 +11030,7 @@ app.get("/api/leads/export.csv", (req, res) => {
           ? resolveJobberWebUri("quotes", l.quoteId)
           : "https://secure.getjobber.com/quotes");
       return [
-        (l.dateReceived || new Date().toISOString()).slice(0, 10),
+        formatEdmontonLeadTimestamp(l.dateReceived || l.createdAt || new Date().toISOString(), l.timeReceived).combined,
         resolveCleanSheetTab(l.sourceTab || l.source, l).sourceTab,
         l.source || "Quo Call / Voice",
         l.customerName || "",
@@ -11477,6 +11634,7 @@ app.post("/api/public/book", async (req, res) => {
       lineItems: quoteLineItems,
     };
 
+    const bookReceivedTs = formatEdmontonLeadTimestamp(new Date().toISOString());
     const newLead = {
       id: `lead-book-${Date.now().toString(36)}`,
       firstName,
@@ -11494,8 +11652,10 @@ app.post("/api/public/book", async (req, res) => {
       source: resolvedSourceLabel as any,
       sourceTab: resolvedSourceTab,
       campaignName: `${routePathLabel} (${heardAbout || resolvedSourceTab})`,
-      dateReceived: new Date().toISOString(),
-      communicatedAt: new Date().toISOString(),
+      dateReceived: bookReceivedTs.iso,
+      timeReceived: bookReceivedTs.timeStr,
+      receivedTimestampDisplay: bookReceivedTs.combined,
+      communicatedAt: bookReceivedTs.iso,
       hasCommunicated: true,
       status: "Quoted" as any,
       verdict: "Good lead" as const,
@@ -16729,7 +16889,10 @@ function upsertCallLeadIntoCleanSheet(
       callLogEntry.timestamp &&
       (!existingLead.dateReceived || String(callLogEntry.timestamp) > String(existingLead.dateReceived))
     ) {
-      existingLead.dateReceived = callLogEntry.timestamp;
+      const updatedCallTs = formatEdmontonLeadTimestamp(callLogEntry.timestamp);
+      existingLead.dateReceived = updatedCallTs.iso;
+      (existingLead as any).timeReceived = updatedCallTs.timeStr;
+      (existingLead as any).receivedTimestampDisplay = updatedCallTs.combined;
     }
     if (
       callLogEntry.transcriptText &&
@@ -16824,6 +16987,7 @@ function upsertCallLeadIntoCleanSheet(
       ? `Cleaning Caller ${callLogEntry.callerPhone}`
       : `Potential Job Caller ${callLogEntry.callerPhone}`;
 
+  const callReceivedTs = formatEdmontonLeadTimestamp(callLogEntry.timestamp || new Date().toISOString());
   const newSheetLead: any = {
     id: `lead-quo-${callLogEntry.callId || Date.now().toString(36)}`,
     customerName: displayName,
@@ -16835,13 +16999,15 @@ function upsertCallLeadIntoCleanSheet(
     serviceRequested: analysis.serviceRequested,
     bedrooms: analysis.bedrooms,
     bathrooms: analysis.bathrooms,
-    dateOfServiceRequested: (callLogEntry.timestamp || new Date().toISOString()).slice(0, 10),
+    dateOfServiceRequested: callReceivedTs.dateStr,
     source: callLogEntry.answeredByAi
       ? `Sonia AI / Missed Call (${callLogEntry.lineName})`
       : `Voice / Quo Call (${callLogEntry.lineName})`,
     sourceTab: "Quo",
     campaignName: `Quo ${callLogEntry.lineName} — Transcript Auto-Sync`,
-    dateReceived: callLogEntry.timestamp || new Date().toISOString(),
+    dateReceived: callReceivedTs.iso,
+    timeReceived: callReceivedTs.timeStr,
+    receivedTimestampDisplay: callReceivedTs.combined,
     status: "New",
     verdict: analysis.leadVerdict === "GOOD_LEAD" ? "Good lead" : "Follow-up",
     leadVerdict: analysis.leadVerdict,
